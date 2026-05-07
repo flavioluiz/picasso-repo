@@ -10,7 +10,7 @@ from backend.database import init_db, DB_PATH
 from backend.config import REPOSITORY_DIR
 from backend import scanner
 from backend import carlog_scanner
-from backend.api import tracks, playlists, upload, youtube
+from backend.api import tracks, playlists, upload, youtube, car_logs
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,7 @@ app.include_router(tracks.router, prefix="/api")
 app.include_router(playlists.router, prefix="/api")
 app.include_router(upload.router, prefix="/api")
 app.include_router(youtube.router, prefix="/api")
+app.include_router(car_logs.router, prefix="/api")
 
 app.add_middleware(
     CORSMiddleware,
