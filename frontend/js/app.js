@@ -1384,6 +1384,7 @@
           ${badges}
           <a class="btn btn-primary" href="${carLogApi.rawUrl(session.session_id)}" download style="font-size:0.88rem;padding:6px 14px;">&#11015; Baixar JSONL</a>
         </div>
+        <div id="carLogWarnings"></div>
       </div>
 
       <div class="carlog-detail-section">
@@ -1445,6 +1446,13 @@
       </div>
 
       ${fieldsHtml}
+
+      <div class="carlog-detail-section" id="carLogPreviewSection">
+        <h3 class="carlog-detail-heading">Debug & Preview</h3>
+        <div id="carLogPreview">
+          <p class="placeholder">Carregando preview...</p>
+        </div>
+      </div>
     `;
   }
 
@@ -1674,6 +1682,50 @@
     _updateVarChips();
   }
 
+  function _renderPreviewSample(sample) {
+    const json = JSON.stringify(sample.data, null, 2);
+    return `<div class="carlog-preview-sample">
+      <span class="carlog-preview-line">Linha ${sample.line}</span>
+      <pre class="carlog-preview-json">${esc(json)}</pre>
+    </div>`;
+  }
+
+  async function _loadCarLogPreview(sessionId) {
+    const container = document.getElementById('carLogPreview');
+    if (!container) return;
+    try {
+      const preview = await carLogApi.getPreview(sessionId, 3);
+      const warningsEl = document.getElementById('carLogWarnings');
+      if (warningsEl && preview.warnings && preview.warnings.length > 0) {
+        warningsEl.innerHTML = preview.warnings.map(w => {
+          let icon = '\u26A0';
+          let cls = 'carlog-warning-invalid_lines';
+          if (w.warning_type === 'file_changed') { icon = '\u26A0'; cls = 'carlog-warning-file_changed'; }
+          else if (w.warning_type === 'still_growing') { icon = '\u23F3'; cls = 'carlog-warning-still_growing'; }
+          else if (w.warning_type === 'invalid_lines') { icon = '\u26A0'; cls = 'carlog-warning-invalid_lines'; }
+          return `<div class="carlog-warning ${cls}"><span class="carlog-warning-icon">${icon}</span> ${esc(w.message)}</div>`;
+        }).join('');
+      }
+      let html = '';
+      if (preview.first_samples && preview.first_samples.length > 0) {
+        html += `<div class="carlog-preview-section"><h4 style="margin:0 0 8px;font-weight:600;font-size:0.9rem;">Primeiras amostras</h4>`;
+        html += preview.first_samples.map(s => _renderPreviewSample(s)).join('');
+        html += '</div>';
+      }
+      if (preview.last_samples && preview.last_samples.length > 0) {
+        html += `<div class="carlog-preview-section"><h4 style="margin:0 0 8px;font-weight:600;font-size:0.9rem;">\u00daltimas amostras</h4>`;
+        html += preview.last_samples.map(s => _renderPreviewSample(s)).join('');
+        html += '</div>';
+      }
+      html += `<div style="margin-top:8px;font-size:0.82rem;color:var(--text-secondary);">
+        Total de linhas: ${preview.total_lines} &middot; Amostras v\u00e1lidas: ${preview.sample_count} &middot; Linhas inv\u00e1lidas: ${preview.invalid_lines}
+      </div>`;
+      container.innerHTML = html || '<p class="placeholder">Nenhum dado de preview dispon\u00edvel.</p>';
+    } catch (e) {
+      container.innerHTML = `<p class="placeholder">Erro ao carregar preview: ${esc(e.message)}</p>`;
+    }
+  }
+
   const routes = {
     '#dashboard': loadDashboard,
     '#biblioteca': loadBiblioteca,
@@ -1705,6 +1757,7 @@
           });
         }
         _bindChartEvents();
+        _loadCarLogPreview(session.session_id);
       } catch (e) {
         _destroyChart();
         contentEl.innerHTML = `<p class="placeholder">Erro ao carregar sess\u00e3o: ${esc(e.message)}</p><button class="btn" onclick="window.location.hash='#car-logs'" style="margin-top:12px;">&#8592; Voltar</button>`;

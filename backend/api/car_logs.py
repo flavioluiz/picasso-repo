@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -15,6 +16,8 @@ from backend.models import (
     CarLogFieldStats,
     CarLogSeries,
     CarLogSeriesResponse,
+    CarLogPreviewWarning,
+    CarLogPreviewResponse,
 )
 
 router = APIRouter()
@@ -334,6 +337,96 @@ async def get_session_series(
         series_list.append(CarLogSeries(field=field, label=label, unit=unit, points=points))
 
     return CarLogSeriesResponse(session=summary, time_axis=time_axis, series=series_list)
+
+
+@router.get("/car-logs/sessions/{session_id}/preview", response_model=CarLogPreviewResponse)
+async def get_session_preview(
+    session_id: str,
+    n: int = Query(5, ge=1, le=50),
+):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute(
+            "SELECT * FROM car_log_sessions WHERE session_id = ?",
+            (session_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Session not found")
+        relative_path = row["relative_path"]
+        stored_file_size = row["file_size"]
+        stored_scan_mtime = row["scan_mtime"]
+    finally:
+        conn.close()
+
+    full_path = Path(REPOSITORY_DIR) / relative_path
+    try:
+        if not full_path.resolve().is_relative_to(Path(REPOSITORY_DIR).resolve()):
+            raise HTTPException(status_code=404, detail="Invalid path")
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Invalid path")
+    if not full_path.exists():
+        raise HTTPException(status_code=404, detail="Raw file not found on disk")
+
+    all_parsed: list[tuple[int, dict]] = []
+    total_lines = 0
+    invalid_lines = 0
+
+    with open(full_path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            total_lines += 1
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                obj = json.loads(stripped)
+                all_parsed.append((total_lines, obj))
+            except json.JSONDecodeError:
+                invalid_lines += 1
+
+    sample_count = len(all_parsed)
+    first_samples = [{"line": ln, "data": d} for ln, d in all_parsed[:n]]
+    if sample_count > 2 * n:
+        last_samples = [{"line": ln, "data": d} for ln, d in all_parsed[-n:]]
+    elif sample_count > n:
+        last_samples = [{"line": ln, "data": d} for ln, d in all_parsed[n:]]
+    else:
+        last_samples = []
+
+    warnings: list[CarLogPreviewWarning] = []
+
+    current_stat = full_path.stat()
+    if current_stat.st_size != stored_file_size or current_stat.st_mtime != stored_scan_mtime:
+        warnings.append(CarLogPreviewWarning(
+            warning_type="file_changed",
+            message=(
+                f"File has changed since last scan "
+                f"(stored: {stored_file_size} bytes, current: {current_stat.st_size} bytes)"
+            ),
+        ))
+
+    if invalid_lines > 0:
+        warnings.append(CarLogPreviewWarning(
+            warning_type="invalid_lines",
+            message=f"{invalid_lines} invalid line(s) were ignored during parsing",
+        ))
+
+    if current_stat.st_mtime > time.time() - 300:
+        warnings.append(CarLogPreviewWarning(
+            warning_type="still_growing",
+            message="File was recently modified and may still be growing",
+        ))
+
+    return CarLogPreviewResponse(
+        first_samples=first_samples,
+        last_samples=last_samples,
+        sample_count=sample_count,
+        total_lines=total_lines,
+        invalid_lines=invalid_lines,
+        warnings=warnings,
+    )
 
 
 @router.get("/car-logs/sessions/{session_id}/raw")

@@ -694,3 +694,260 @@ def test_series_default_time_axis_is_relative_s():
     assert resp.status_code == 200
     data = resp.json()
     assert data["time_axis"] == "relative_s"
+
+
+# --- Preview endpoint tests ---
+
+
+def test_preview_returns_first_and_last_samples():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    samples = _make_series_samples(10)
+    _write_jsonl(d / "s1.jsonl", samples)
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/preview", params={"n": 3})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "first_samples" in data
+    assert "last_samples" in data
+    assert len(data["first_samples"]) == 3
+    assert len(data["last_samples"]) == 3
+
+
+def test_preview_first_samples_contain_line_and_data():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", [_sample()])
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/preview", params={"n": 5})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["first_samples"]) == 1
+    sample = data["first_samples"][0]
+    assert "line" in sample
+    assert "data" in sample
+    assert sample["line"] == 1
+    assert isinstance(sample["data"], dict)
+
+
+def test_preview_sample_count_matches_valid_lines():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    samples = _make_series_samples(7)
+    _write_jsonl(d / "s1.jsonl", samples)
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/preview", params={"n": 3})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["sample_count"] == 7
+    assert data["total_lines"] == 7
+    assert data["invalid_lines"] == 0
+
+
+def test_preview_detects_invalid_lines():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    lines = [json.dumps(_sample()) for _ in range(5)]
+    content = "\n".join(lines) + "\nBAD LINE\nANOTHER BAD\n"
+    f = d / "s1.jsonl"
+    with open(f, "w") as fh:
+        fh.write(content)
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/preview", params={"n": 10})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["sample_count"] == 5
+    assert data["invalid_lines"] == 2
+    warning_types = [w["warning_type"] for w in data["warnings"]]
+    assert "invalid_lines" in warning_types
+
+
+def test_preview_invalid_lines_warning_message():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    lines = [json.dumps(_sample()) for _ in range(3)]
+    content = "\n".join(lines) + "\n{" + '"bad"'
+    f = d / "s1.jsonl"
+    with open(f, "w") as fh:
+        fh.write(content)
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/preview", params={"n": 5})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["invalid_lines"] >= 1
+    invalid_warnings = [w for w in data["warnings"] if w["warning_type"] == "invalid_lines"]
+    assert len(invalid_warnings) == 1
+    assert "1" in invalid_warnings[0]["message"] or str(data["invalid_lines"]) in invalid_warnings[0]["message"]
+
+
+def test_preview_no_overlap_when_few_samples():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    samples = _make_series_samples(6)
+    _write_jsonl(d / "s1.jsonl", samples)
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/preview", params={"n": 5})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["first_samples"]) == 5
+    assert len(data["last_samples"]) == 1
+    first_lines = [s["line"] for s in data["first_samples"]]
+    last_lines = [s["line"] for s in data["last_samples"]]
+    assert set(first_lines).isdisjoint(set(last_lines))
+
+
+def test_preview_no_last_samples_when_few():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    samples = _make_series_samples(3)
+    _write_jsonl(d / "s1.jsonl", samples)
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/preview", params={"n": 5})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["first_samples"]) == 3
+    assert len(data["last_samples"]) == 0
+
+
+def test_preview_n_param_default():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    samples = _make_series_samples(20)
+    _write_jsonl(d / "s1.jsonl", samples)
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/preview")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["first_samples"]) == 5
+    assert len(data["last_samples"]) == 5
+
+
+def test_preview_n_param_custom():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    samples = _make_series_samples(30)
+    _write_jsonl(d / "s1.jsonl", samples)
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/preview", params={"n": 10})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["first_samples"]) == 10
+    assert len(data["last_samples"]) == 10
+
+
+def test_preview_n_param_bounds():
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/nonexistent/preview", params={"n": 0})
+    assert resp.status_code == 422
+    resp = c.get("/api/car-logs/sessions/nonexistent/preview", params={"n": 100})
+    assert resp.status_code == 422
+
+
+def test_preview_not_found():
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/nonexistent/preview")
+    assert resp.status_code == 404
+
+
+def test_preview_file_changed_warning():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    f = d / "s1.jsonl"
+    _write_jsonl(f, [_sample()])
+    c = _client()
+    _sync(c)
+    import time
+    time.sleep(0.05)
+    _write_jsonl(f, [_sample(), _sample()])
+    os.utime(f, (time.time(), time.time()))
+    time.sleep(0.05)
+    resp = c.get("/api/car-logs/sessions/s1/preview", params={"n": 5})
+    assert resp.status_code == 200
+    data = resp.json()
+    warning_types = [w["warning_type"] for w in data["warnings"]]
+    assert "file_changed" in warning_types
+
+
+def test_preview_still_growing_warning_when_recent_mtime():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    f = d / "s1.jsonl"
+    _write_jsonl(f, [_sample()])
+    import time
+    os.utime(f, (time.time(), time.time()))
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/preview", params={"n": 5})
+    assert resp.status_code == 200
+    data = resp.json()
+    warning_types = [w["warning_type"] for w in data["warnings"]]
+    assert "still_growing" in warning_types
+
+
+def test_preview_no_warnings_for_stable_file():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    samples = _make_series_samples(5)
+    _write_jsonl(d / "s1.jsonl", samples)
+    c = _client()
+    _sync(c)
+    import time
+    old_mtime = time.time() - 600
+    os.utime(d / "s1.jsonl", (old_mtime, old_mtime))
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/preview", params={"n": 5})
+    assert resp.status_code == 200
+    data = resp.json()
+    warning_types = [w["warning_type"] for w in data["warnings"]]
+    assert "still_growing" not in warning_types
+    assert "file_changed" not in warning_types
+
+
+def test_preview_response_model_structure():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", [_sample()])
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/preview", params={"n": 5})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "first_samples" in data
+    assert "last_samples" in data
+    assert "sample_count" in data
+    assert "total_lines" in data
+    assert "invalid_lines" in data
+    assert "warnings" in data
+    assert isinstance(data["warnings"], list)
+    assert isinstance(data["sample_count"], int)
+    assert isinstance(data["total_lines"], int)
+    assert isinstance(data["invalid_lines"], int)
+
+
+def test_preview_empty_lines_not_counted_as_invalid():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    lines = [json.dumps(_sample()) for _ in range(3)]
+    content = "\n".join(lines) + "\n\n\n"
+    f = d / "s1.jsonl"
+    with open(f, "w") as fh:
+        fh.write(content)
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/preview", params={"n": 5})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["sample_count"] == 3
+    assert data["invalid_lines"] == 0
+    assert data["total_lines"] >= 3

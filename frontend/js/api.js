@@ -62,4 +62,9 @@ const carLogApi = {
     if (maxPoints) params.set('max_points', String(maxPoints));
     return api.get(`/api/car-logs/sessions/${encodeURIComponent(sessionId)}/series?${params.toString()}`);
   },
+  getPreview(sessionId, n) {
+    const params = new URLSearchParams();
+    if (n) params.set('n', String(n));
+    return api.get(`/api/car-logs/sessions/${encodeURIComponent(sessionId)}/preview?${params.toString()}`);
+  },
 };

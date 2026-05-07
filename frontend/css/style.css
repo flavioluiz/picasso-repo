@@ -847,6 +847,87 @@ body.player-active .content {
   font-size: 0.85rem;
 }
 
+.carlog-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.carlog-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+.carlog-warning-icon {
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+
+.carlog-warning-file_changed {
+  background: rgba(245, 158, 11, 0.12);
+  color: #d97706;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+html.dark .carlog-warning-file_changed {
+  color: #fbbf24;
+}
+
+.carlog-warning-still_growing {
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+html.dark .carlog-warning-still_growing {
+  color: #60a5fa;
+}
+
+.carlog-warning-invalid_lines {
+  background: rgba(239, 68, 71, 0.12);
+  color: #dc2626;
+  border: 1px solid rgba(239, 68, 71, 0.3);
+}
+
+html.dark .carlog-warning-invalid_lines {
+  color: #f87171;
+}
+
+.carlog-preview-section {
+  margin-top: 12px;
+}
+
+.carlog-preview-sample {
+  margin-bottom: 8px;
+}
+
+.carlog-preview-line {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.carlog-preview-json {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-family: monospace;
+  font-size: 0.78rem;
+  overflow-x: auto;
+  white-space: pre;
+  margin: 4px 0 0;
+  max-height: 200px;
+  overflow-y: auto;
+  color: var(--text);
+}
+
 @media (max-width: 768px) {
   .carlog-meta-grid {
     grid-template-columns: 1fr 1fr;

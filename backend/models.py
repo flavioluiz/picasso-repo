@@ -51,6 +51,20 @@ class CarLogSeriesResponse(BaseModel):
     series: List[CarLogSeries]
 
 
+class CarLogPreviewWarning(BaseModel):
+    warning_type: str
+    message: str
+
+
+class CarLogPreviewResponse(BaseModel):
+    first_samples: List[dict]
+    last_samples: List[dict]
+    sample_count: int
+    total_lines: int
+    invalid_lines: int
+    warnings: List[CarLogPreviewWarning]
+
+
 class Track(BaseModel):
     path: str
     title: Optional[str] = None
