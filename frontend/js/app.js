@@ -27,8 +27,10 @@
   }
 
   function setActiveLink(hash) {
+    const prefix = hash.split('/')[0];
     document.querySelectorAll('.nav-link').forEach(link => {
-      link.classList.toggle('active', link.getAttribute('href') === hash);
+      const linkHash = link.getAttribute('href');
+      link.classList.toggle('active', linkHash === prefix || (prefix.startsWith('#car-logs') && linkHash === '#car-logs'));
     });
   }
 
@@ -1090,19 +1092,204 @@
     switchTab('upload');
   }
 
+  let _carLogFilterDevice = '';
+  let _carLogFilterVin = '';
+  let _carLogFilterDateFrom = '';
+  let _carLogFilterDateTo = '';
+  let _carLogFilterHasGps = false;
+  let _carLogFilterHasWifi = false;
+
+  function formatCarDuration(seconds) {
+    if (seconds == null) return '--';
+    if (seconds < 60) return Math.round(seconds) + 's';
+    if (seconds < 3600) {
+      const m = Math.floor(seconds / 60);
+      const s = Math.round(seconds % 60);
+      return m + 'min ' + s + 's';
+    }
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    return h + 'h ' + m + 'min';
+  }
+
+  function formatCarTimestamp(iso) {
+    if (!iso) return '--';
+    try {
+      const d = new Date(iso);
+      return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' }) +
+        ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } catch {
+      return iso;
+    }
+  }
+
+  function carLogFiltersHtml() {
+    return `
+      <div class="carlog-filters">
+        <input type="text" class="search-input" placeholder="Device..." id="carLogDevice" value="${esc(_carLogFilterDevice)}" style="max-width:180px;">
+        <input type="text" class="search-input" placeholder="VIN..." id="carLogVin" value="${esc(_carLogFilterVin)}" style="max-width:180px;">
+        <input type="date" class="search-input" id="carLogDateFrom" value="${esc(_carLogFilterDateFrom)}" style="max-width:160px;" title="Data inicial">
+        <input type="date" class="search-input" id="carLogDateTo" value="${esc(_carLogFilterDateTo)}" style="max-width:160px;" title="Data final">
+        <label class="carlog-check"><input type="checkbox" id="carLogHasGps" ${_carLogFilterHasGps ? 'checked' : ''} style="accent-color:var(--accent);"> GPS</label>
+        <label class="carlog-check"><input type="checkbox" id="carLogHasWifi" ${_carLogFilterHasWifi ? 'checked' : ''} style="accent-color:var(--accent);"> Wi-Fi</label>
+        <button class="btn btn-primary" id="carLogFilterBtn" style="padding:8px 14px;font-size:0.88rem;">Filtrar</button>
+      </div>
+    `;
+  }
+
+  function renderCarLogSessionRow(s) {
+    const gpsIcon = s.gps_seen ? '<span class="carlog-badge carlog-gps" title="GPS disponível">&#127757;</span>' : '';
+    const wifiIcon = s.wifi_seen ? '<span class="carlog-badge carlog-wifi" title="Wi-Fi visto">&#128246;</span>' : '';
+    return `
+      <div class="card carlog-session-card" data-session-id="${esc(s.session_id)}">
+        <div style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr) auto auto;gap:14px;align-items:center;">
+          <div style="min-width:0;">
+            <div style="font-weight:700;font-size:0.95rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(s.device_name)}</div>
+            <div style="font-size:0.82rem;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(s.vin || 'VIN não informado')}</div>
+          </div>
+          <div style="min-width:0;">
+            <div style="font-size:0.88rem;">${formatCarTimestamp(s.started_at)}</div>
+            <div style="font-size:0.8rem;color:var(--text-secondary);">Duração: ${formatCarDuration(s.duration_s)}</div>
+          </div>
+          <div style="text-align:right;min-width:0;">
+            <div style="font-size:0.85rem;">${formatBytes(s.file_size)} &middot; ${s.sample_count} amostras</div>
+            <div style="margin-top:4px;">${gpsIcon}${wifiIcon}</div>
+          </div>
+          <div class="actions">
+            <button class="btn-icon carlog-open" data-sid="${esc(s.session_id)}" title="Abrir sessão">&#128065;</button>
+            <a class="btn-icon carlog-download" href="${carLogApi.rawUrl(s.session_id)}" title="Baixar JSONL" download>&#11015;</a>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function setupCarLogFilters() {
+    const deviceInput = document.getElementById('carLogDevice');
+    const vinInput = document.getElementById('carLogVin');
+    const dateFrom = document.getElementById('carLogDateFrom');
+    const dateTo = document.getElementById('carLogDateTo');
+    const hasGps = document.getElementById('carLogHasGps');
+    const hasWifi = document.getElementById('carLogHasWifi');
+    const filterBtn = document.getElementById('carLogFilterBtn');
+    if (filterBtn) {
+      filterBtn.addEventListener('click', () => {
+        _carLogFilterDevice = deviceInput?.value || '';
+        _carLogFilterVin = vinInput?.value || '';
+        _carLogFilterDateFrom = dateFrom?.value || '';
+        _carLogFilterDateTo = dateTo?.value || '';
+        _carLogFilterHasGps = hasGps?.checked || false;
+        _carLogFilterHasWifi = hasWifi?.checked || false;
+        fetchCarLogSessions();
+      });
+    }
+  }
+
+  async function fetchCarLogSessions() {
+    try {
+      const sessions = await carLogApi.listSessions({
+        device: _carLogFilterDevice || undefined,
+        vin: _carLogFilterVin || undefined,
+        date_from: _carLogFilterDateFrom || undefined,
+        date_to: _carLogFilterDateTo || undefined,
+        has_gps: _carLogFilterHasGps || undefined,
+        has_wifi: _carLogFilterHasWifi || undefined,
+        limit: 200,
+      });
+      const list = Array.isArray(sessions) ? sessions : [];
+      if (!list.length) {
+        const listEl = document.getElementById('carLogSessionList');
+        if (listEl) listEl.innerHTML = '<p class="placeholder" style="text-align:center;padding:48px 0;">&#128663; Nenhuma sessão de datalog encontrada.</p>';
+        return;
+      }
+      const listEl = document.getElementById('carLogSessionList');
+      if (listEl) listEl.innerHTML = list.map(renderCarLogSessionRow).join('');
+      bindCarLogSessionActions();
+    } catch (e) {
+      const listEl = document.getElementById('carLogSessionList');
+      if (listEl) listEl.innerHTML = `<p class="placeholder">Erro ao carregar sessões: ${esc(e.message)}</p>`;
+    }
+  }
+
+  function bindCarLogSessionActions() {
+    contentEl.querySelectorAll('.carlog-open').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        window.location.hash = '#car-logs/' + btn.dataset.sid;
+      });
+    });
+    contentEl.querySelectorAll('.carlog-session-card').forEach(card => {
+      card.style.cursor = 'pointer';
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('.btn-icon') || e.target.closest('.carlog-download')) return;
+        window.location.hash = '#car-logs/' + card.dataset.sessionId;
+      });
+    });
+  }
+
+  async function loadCarLogs() {
+    contentEl.innerHTML = `
+      <h2 style="margin-top:0;margin-bottom:20px;font-weight:700;">Car Datalog</h2>
+      ${carLogFiltersHtml()}
+      <div id="carLogSessionList" style="display:flex;flex-direction:column;gap:10px;">
+        <p class="placeholder">Carregando sessões...</p>
+      </div>
+    `;
+    setupCarLogFilters();
+    await fetchCarLogSessions();
+  }
+
   const routes = {
     '#dashboard': loadDashboard,
     '#biblioteca': loadBiblioteca,
     '#playlists': loadPlaylists,
     '#adicionar': loadAdicionar,
+    '#car-logs': loadCarLogs,
   };
 
-  function navigate() {
+  async function navigate() {
     const hash = window.location.hash || '#dashboard';
     setActiveLink(hash);
     if (hash !== '#adicionar') {
       Object.values(_youtubePollTimers).forEach(clearInterval);
       _youtubePollTimers = {};
+    }
+    if (hash.startsWith('#car-logs/')) {
+      const sessionId = hash.slice('#car-logs/'.length);
+      contentEl.innerHTML = '<p class="placeholder">Carregando sess\u00e3o...</p>';
+      try {
+        const session = await carLogApi.getSession(sessionId);
+        contentEl.innerHTML = `
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
+            <button class="btn" id="carLogDetailBack" style="background:var(--surface);border:1px solid var(--border);">&#8592; Voltar</button>
+            <h2 style="margin:0;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(session.session_id)}</h2>
+          </div>
+          <div class="cards-grid" style="margin-bottom:20px;">
+            <div class="card"><p class="card-title">Device</p><p class="card-value" style="font-size:1.1rem;">${esc(session.device_name)}</p></div>
+            <div class="card"><p class="card-title">VIN</p><p class="card-value" style="font-size:1.1rem;">${esc(session.vin || '--')}</p></div>
+            <div class="card"><p class="card-title">In\u00edcio</p><p class="card-value" style="font-size:1.1rem;">${formatCarTimestamp(session.started_at)}</p></div>
+            <div class="card"><p class="card-title">Dura\u00e7\u00e3o</p><p class="card-value" style="font-size:1.1rem;">${formatCarDuration(session.duration_s)}</p></div>
+            <div class="card"><p class="card-title">Amostras</p><p class="card-value" style="font-size:1.1rem;">${session.sample_count}</p></div>
+            <div class="card"><p class="card-title">Tamanho</p><p class="card-value" style="font-size:1.1rem;">${formatBytes(session.file_size)}</p></div>
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:20px;">
+            ${session.gps_seen ? '<span class="carlog-badge carlog-gps">&#127757; GPS</span>' : ''}
+            ${session.wifi_seen ? '<span class="carlog-badge carlog-wifi">&#128246; Wi-Fi</span>' : ''}
+            <a class="btn btn-primary" href="${carLogApi.rawUrl(session.session_id)}" download style="font-size:0.92rem;">&#11015; Baixar JSONL</a>
+          </div>
+          ${Array.isArray(session.fields) && session.fields.length ? `
+          <h3 style="margin:0 0 10px;font-weight:600;font-size:1rem;">Campos dispon\u00edveis</h3>
+          <div class="table-wrap"><table><thead><tr><th>Campo</th><th>M\u00edn</th><th>M\u00e1x</th><th>M\u00e9dia</th><th>Amostras</th></tr></thead><tbody>
+            ${session.fields.map(f => `<tr><td>${esc(f.field_path)}</td><td>${f.min_value != null ? f.min_value.toFixed(2) : '--'}</td><td>${f.max_value != null ? f.max_value.toFixed(2) : '--'}</td><td>${f.avg_value != null ? f.avg_value.toFixed(2) : '--'}</td><td>${f.sample_count != null ? f.sample_count : '--'}</td></tr>`).join('')}
+          </tbody></table></div>
+          ` : ''}
+        `;
+        document.getElementById('carLogDetailBack').addEventListener('click', () => { window.location.hash = '#car-logs'; });
+      } catch (e) {
+        contentEl.innerHTML = `<p class="placeholder">Erro ao carregar sess\u00e3o: ${esc(e.message)}</p><button class="btn" onclick="window.location.hash='#car-logs'" style="margin-top:12px;">&#8592; Voltar</button>`;
+      }
+      if (window.innerWidth <= 768) closeSidebar();
+      return;
     }
     const view = routes[hash] || loadDashboard;
     view();

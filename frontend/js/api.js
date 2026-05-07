@@ -33,3 +33,26 @@ const api = {
     return _fetchJSON('DELETE', path);
   },
 };
+
+const carLogApi = {
+  listSessions(params) {
+    const qs = new URLSearchParams();
+    if (params.device) qs.set('device', params.device);
+    if (params.vin) qs.set('vin', params.vin);
+    if (params.date_from) qs.set('date_from', params.date_from);
+    if (params.date_to) qs.set('date_to', params.date_to);
+    if (params.has_gps) qs.set('has_gps', 'true');
+    if (params.has_wifi) qs.set('has_wifi', 'true');
+    if (params.q) qs.set('q', params.q);
+    if (params.skip) qs.set('skip', String(params.skip));
+    if (params.limit) qs.set('limit', String(params.limit));
+    const query = qs.toString();
+    return api.get(`/api/car-logs/sessions${query ? '?' + query : ''}`);
+  },
+  getSession(sessionId) {
+    return api.get(`/api/car-logs/sessions/${encodeURIComponent(sessionId)}`);
+  },
+  rawUrl(sessionId) {
+    return `/api/car-logs/sessions/${encodeURIComponent(sessionId)}/raw`;
+  },
+};
