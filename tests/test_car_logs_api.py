@@ -650,3 +650,47 @@ def test_series_integer_values_converted_to_float():
     data = resp.json()
     for p in data["series"][0]["points"]:
         assert isinstance(p[1], float)
+
+
+def test_series_max_points_param_override():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", _make_series_samples(200, interval_s=1.0))
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "direct.rpm", "max_points": 2000})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["series"][0]["points"]) == 200
+
+
+def test_series_multiple_fields_different_sample_counts():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    samples = _make_series_samples(5)
+    for i in range(3, 5):
+        if "gps" in samples[i]:
+            del samples[i]["gps"]
+    _write_jsonl(d / "s1.jsonl", samples)
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "direct.rpm,gps.speed"})
+    assert resp.status_code == 200
+    data = resp.json()
+    fields_map = {s["field"]: s for s in data["series"]}
+    assert "direct.rpm" in fields_map
+    assert "gps.speed" in fields_map
+    assert len(fields_map["direct.rpm"]["points"]) == 5
+    assert len(fields_map["gps.speed"]["points"]) <= 3
+
+
+def test_series_default_time_axis_is_relative_s():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", _make_series_samples(3))
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "direct.rpm"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["time_axis"] == "relative_s"

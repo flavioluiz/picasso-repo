@@ -728,12 +728,145 @@ body.player-active .content {
   font-size: 0.82rem;
 }
 
+.carlog-chart-section {
+  margin-bottom: 28px;
+}
+
+.carlog-presets {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.carlog-preset-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition), color var(--transition);
+}
+
+.carlog-preset-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.carlog-preset-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.carlog-var-selector {
+  margin-bottom: 16px;
+}
+
+.carlog-var-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.carlog-var-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition), color var(--transition);
+  user-select: none;
+}
+
+.carlog-var-chip:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.carlog-var-chip.selected {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.carlog-chart-container {
+  position: relative;
+  width: 100%;
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.carlog-chart-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+}
+
+.carlog-chart-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  gap: 8px;
+}
+
+.carlog-time-axis-sel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.carlog-time-axis-sel select {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
 @media (max-width: 768px) {
   .carlog-meta-grid {
     grid-template-columns: 1fr 1fr;
   }
   .carlog-summary-grid {
     grid-template-columns: 1fr 1fr;
+  }
+  .carlog-filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .carlog-filters .search-input {
+    max-width: 100%;
+  }
+  .carlog-detail-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .carlog-detail-badges {
+    justify-content: flex-start;
   }
 }
 
@@ -743,5 +876,12 @@ body.player-active .content {
   }
   .carlog-summary-grid {
     grid-template-columns: 1fr;
+  }
+  .carlog-presets {
+    flex-direction: column;
+  }
+  .carlog-presets .carlog-preset-btn {
+    width: 100%;
+    text-align: center;
   }
 }

@@ -55,4 +55,11 @@ const carLogApi = {
   rawUrl(sessionId) {
     return `/api/car-logs/sessions/${encodeURIComponent(sessionId)}/raw`;
   },
+  getSeries(sessionId, fields, timeAxis, maxPoints) {
+    const params = new URLSearchParams();
+    params.set('fields', fields.join(','));
+    params.set('time_axis', timeAxis || 'relative_s');
+    if (maxPoints) params.set('max_points', String(maxPoints));
+    return api.get(`/api/car-logs/sessions/${encodeURIComponent(sessionId)}/series?${params.toString()}`);
+  },
 };

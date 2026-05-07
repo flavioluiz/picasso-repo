@@ -1099,6 +1099,64 @@
   let _carLogFilterHasGps = false;
   let _carLogFilterHasWifi = false;
 
+  const CAR_LOG_PRESETS = {
+    'Motor': ['direct.rpm', 'direct.engine_load_pct', 'direct.throttle_pct', 'direct.timing_advance_deg'],
+    'Combust\u00e3o': ['direct.short_fuel_trim_b1_pct', 'direct.long_fuel_trim_b1_pct', 'direct.o2_b1s1_voltage_v', 'direct.o2_b1s2_voltage_v'],
+    'Temperaturas': ['direct.coolant_temp_c', 'direct.intake_temp_c'],
+    'Consumo': ['inferred.instant_km_l', 'inferred.selected_fuel_rate_l_h', 'inferred.trip_average_km_l'],
+    'Movimento': ['direct.speed_kmh', 'gps.speed'],
+  };
+
+  const CAR_LOG_FIELD_LABELS = {
+    'direct.rpm': 'RPM',
+    'direct.speed_kmh': 'Speed (km/h)',
+    'direct.coolant_temp_c': 'Coolant Temp (\u00b0C)',
+    'direct.intake_temp_c': 'Intake Temp (\u00b0C)',
+    'direct.engine_load_pct': 'Engine Load (%)',
+    'direct.throttle_pct': 'Throttle (%)',
+    'direct.timing_advance_deg': 'Timing Advance (\u00b0)',
+    'direct.short_fuel_trim_b1_pct': 'Short Fuel Trim B1 (%)',
+    'direct.long_fuel_trim_b1_pct': 'Long Fuel Trim B1 (%)',
+    'direct.o2_b1s1_voltage_v': 'O2 B1S1 (V)',
+    'direct.o2_b1s2_voltage_v': 'O2 B1S2 (V)',
+    'inferred.instant_km_l': 'Instant Consumption (km/L)',
+    'inferred.selected_fuel_rate_l_h': 'Fuel Rate (L/h)',
+    'inferred.trip_average_km_l': 'Trip Average (km/L)',
+    'gps.speed': 'GPS Speed (km/h)',
+  };
+
+  const CAR_LOG_FIELD_COLORS = {
+    'direct.rpm': '#f59e0b',
+    'direct.engine_load_pct': '#6366f1',
+    'direct.throttle_pct': '#ec4899',
+    'direct.timing_advance_deg': '#14b8a6',
+    'direct.short_fuel_trim_b1_pct': '#f59e0b',
+    'direct.long_fuel_trim_b1_pct': '#6366f1',
+    'direct.o2_b1s1_voltage_v': '#ef4444',
+    'direct.o2_b1s2_voltage_v': '#10b981',
+    'direct.coolant_temp_c': '#ef4444',
+    'direct.intake_temp_c': '#3b82f6',
+    'inferred.instant_km_l': '#8b5cf6',
+    'inferred.selected_fuel_rate_l_h': '#f59e0b',
+    'inferred.trip_average_km_l': '#10b981',
+    'direct.speed_kmh': '#3b82f6',
+    'gps.speed': '#14b8a6',
+  };
+
+  const CAR_LOG_CHART_SERIES_COLORS = [
+    '#6366f1', '#ef4444', '#10b981', '#f59e0b', '#ec4899',
+    '#14b8a6', '#8b5cf6', '#f97316', '#06b6d4', '#84cc16',
+  ];
+
+  let _chartInstance = null;
+  let _chartResizeHandler = null;
+  let _chartLoadId = 0;
+  let _selectedFields = [];
+  let _activePreset = '';
+  let _chartTimeAxis = 'relative_s';
+  let _currentSessionId = null;
+  let _currentSessionFields = [];
+
   function formatCarDuration(seconds) {
     if (seconds == null) return '--';
     if (seconds < 60) return Math.round(seconds) + 's';
@@ -1257,6 +1315,13 @@
 
   function renderCarLogSessionDetail(session) {
     const fields = Array.isArray(session.fields) ? session.fields : [];
+    _currentSessionId = session.session_id;
+    _currentSessionFields = fields;
+    _selectedFields = [];
+    _activePreset = '';
+    _chartTimeAxis = 'relative_s';
+    _destroyChart();
+
     const summaryItems = _carLogSummaryFields(fields);
     const gpsBadge = session.gps_seen ? '<span class="carlog-badge carlog-gps" title="GPS dispon\u00edvel">&#127757; GPS</span>' : '';
     const gpsFixBadge = session.gps_fix_seen ? '<span class="carlog-badge carlog-gps-fix" title="GPS com fix">&#128205; Fix</span>' : '';
@@ -1279,6 +1344,18 @@
         </div>
       `;
     }
+
+    const availableFieldPaths = fields.map(f => f.field_path);
+    const presetButtons = Object.keys(CAR_LOG_PRESETS).map(name => {
+      const presetFields = CAR_LOG_PRESETS[name].filter(f => availableFieldPaths.includes(f));
+      if (presetFields.length === 0) return '';
+      return `<button class="carlog-preset-btn" data-preset="${esc(name)}">${esc(name)}</button>`;
+    }).join('');
+
+    const fieldChips = fields.map(f => {
+      const label = CAR_LOG_FIELD_LABELS[f.field_path] || f.field_path;
+      return `<span class="carlog-var-chip" data-field="${esc(f.field_path)}" title="${esc(f.field_path)}">${esc(label)}</span>`;
+    }).join('');
 
     let fieldsHtml = '';
     if (fields.length) {
@@ -1344,6 +1421,29 @@
       </div>
 
       ${summaryHtml}
+
+      <div class="carlog-chart-section">
+        <h3 class="carlog-detail-heading">Gr\u00e1ficos</h3>
+        <div class="carlog-presets" id="carlogPresets">${presetButtons}</div>
+        <div class="carlog-var-selector">
+          <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:4px;">Selecione vari\u00e1veis:</div>
+          <div class="carlog-var-chips" id="carlogVarChips">${fieldChips}</div>
+        </div>
+        <div class="carlog-time-axis-sel">
+          <label>Eixo do tempo:</label>
+          <select id="carlogTimeAxis">
+            <option value="relative_s" selected>Relativo (s)</option>
+            <option value="sample_time">Hora da amostra</option>
+            <option value="logged_at">Hora de log</option>
+          </select>
+        </div>
+        <div class="carlog-chart-container" id="carlogChartContainer">
+          <div class="carlog-chart-empty" id="carlogChartPlaceholder">
+            Selecione vari\u00e1veis acima para visualizar o gr\u00e1fico.
+          </div>
+        </div>
+      </div>
+
       ${fieldsHtml}
     `;
   }
@@ -1358,6 +1458,220 @@
     `;
     setupCarLogFilters();
     await fetchCarLogSessions();
+  }
+
+  function _destroyChart() {
+    _chartLoadId++;
+    if (_chartInstance) {
+      _chartInstance.destroy();
+      _chartInstance = null;
+    }
+    if (_chartResizeHandler) {
+      window.removeEventListener('resize', _chartResizeHandler);
+      _chartResizeHandler = null;
+    }
+  }
+
+  function _isDark() {
+    return document.documentElement.classList.contains('dark');
+  }
+
+  function _uplotTheme() {
+    const dark = _isDark();
+    return {
+      bg: dark ? '#181b24' : '#ffffff',
+      fg: dark ? '#e5e7eb' : '#1f2937',
+      muted: dark ? '#6b7280' : '#9ca3af',
+      accent: dark ? '#6366f1' : '#4f46e5',
+      grid: dark ? '#2a2e3b' : '#e5e7eb',
+    };
+  }
+
+  async function _loadChart() {
+    _destroyChart();
+    const loadId = ++_chartLoadId;
+    const container = document.getElementById('carlogChartContainer');
+    if (!container || !_currentSessionId || _selectedFields.length === 0) {
+      container.innerHTML = '<div class="carlog-chart-empty" id="carlogChartPlaceholder">Selecione vari\u00e1veis acima para visualizar o gr\u00e1fico.</div>';
+      return;
+    }
+    container.innerHTML = '<div class="carlog-chart-loading">Carregando dados...</div>';
+
+    try {
+      const data = await carLogApi.getSeries(_currentSessionId, _selectedFields, _chartTimeAxis, 2000);
+      if (loadId !== _chartLoadId) return;
+      const curContainer = document.getElementById('carlogChartContainer');
+      if (!curContainer) return;
+
+      if (!data || !Array.isArray(data.series) || data.series.length === 0) {
+        curContainer.innerHTML = '<div class="carlog-chart-empty">Nenhum dado encontrado para as vari\u00e1veis selecionadas.</div>';
+        return;
+      }
+
+      const allTimeSet = new Set();
+      data.series.forEach(s => {
+        if (Array.isArray(s.points)) {
+          s.points.forEach(p => allTimeSet.add(p[0]));
+        }
+      });
+      const timeValues = Array.from(allTimeSet).sort((a, b) => a - b);
+      const timeData = timeValues;
+
+      const seriesData = [timeData];
+      const seriesOpts = [{}];
+      const visibleSeries = [];
+
+      data.series.forEach((s, idx) => {
+        const points = Array.isArray(s.points) ? s.points : [];
+        const timeMap = new Map(points.map(p => [p[0], p[1]]));
+        const vals = timeValues.map(t => {
+          const v = timeMap.get(t);
+          return v !== undefined ? v : null;
+        });
+        seriesData.push(vals);
+
+        const label = s.label || s.field;
+        const unit = s.unit ? ` (${s.unit})` : '';
+        visibleSeries.push(label + unit);
+      });
+
+      const theme = _uplotTheme();
+
+      const uplotSeries = [{}, ...data.series.map((s, idx) => {
+        const label = s.label || s.field;
+        const unit = s.unit ? ` (${s.unit})` : '';
+        const color = CAR_LOG_FIELD_COLORS[s.field] || CAR_LOG_CHART_SERIES_COLORS[idx % CAR_LOG_CHART_SERIES_COLORS.length];
+        return {
+          label: label + unit,
+          stroke: color,
+          width: 1.5,
+          spanGaps: true,
+          dash: [0, 0],
+        };
+      })];
+
+      const chartWidth = curContainer.clientWidth || 800;
+      const chartHeight = Math.min(500, Math.max(300, chartWidth * 0.4));
+
+      const opts = {
+        width: chartWidth,
+        height: chartHeight,
+        series: uplotSeries,
+        cursor: {
+          drag: { x: true, y: true },
+        },
+        axes: [
+          {
+            stroke: theme.muted,
+            grid: { stroke: theme.grid },
+            ticks: { stroke: theme.grid },
+            values: (u, vals) => vals.map(v => {
+              if (_chartTimeAxis === 'relative_s') {
+                return v < 60 ? v.toFixed(1) + 's' : (v / 60).toFixed(1) + 'min';
+              }
+              const d = new Date(v * 1000);
+              return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            }),
+          },
+          ...data.series.map(() => ({
+            stroke: theme.muted,
+            grid: { stroke: theme.grid },
+            ticks: { stroke: theme.grid },
+            values: (u, vals) => vals.map(v => v != null ? v.toFixed(1) : '--'),
+            size: 55,
+          })),
+        ],
+        scales: {
+          x: {
+            time: _chartTimeAxis !== 'relative_s',
+          },
+        },
+        padding: [16, 16, 0, 48],
+      };
+
+      if (_chartTimeAxis === 'relative_s') {
+        opts.scales.x.time = false;
+      }
+
+      curContainer.innerHTML = '';
+      _chartInstance = new uPlot(opts, seriesData, curContainer);
+
+      _chartResizeHandler = () => {
+        if (!_chartInstance) return;
+        const c = document.getElementById('carlogChartContainer');
+        if (!c) return;
+        const w = c.clientWidth || 800;
+        const h = Math.min(500, Math.max(300, w * 0.4));
+        _chartInstance.setSize({ width: w, height: h });
+      };
+      window.addEventListener('resize', _chartResizeHandler);
+    } catch (e) {
+      if (loadId !== _chartLoadId) return;
+      const curContainer = document.getElementById('carlogChartContainer');
+      if (!curContainer) return;
+      curContainer.innerHTML = '<div class="carlog-chart-empty">Erro ao carregar dados: ' + esc(e.message) + '</div>';
+    }
+  }
+
+  function _updateVarChips() {
+    const chips = document.querySelectorAll('#carlogVarChips .carlog-var-chip');
+    chips.forEach(chip => {
+      const field = chip.dataset.field;
+      chip.classList.toggle('selected', _selectedFields.includes(field));
+    });
+  }
+
+  function _updatePresetButtons() {
+    const btns = document.querySelectorAll('#carlogPresets .carlog-preset-btn');
+    btns.forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.preset === _activePreset);
+    });
+  }
+
+  function _bindChartEvents() {
+    const presetBtns = document.querySelectorAll('#carlogPresets .carlog-preset-btn');
+    presetBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const presetName = btn.dataset.preset;
+        if (_activePreset === presetName) {
+          _activePreset = '';
+          _selectedFields = [];
+        } else {
+          _activePreset = presetName;
+          const availableFieldPaths = _currentSessionFields.map(f => f.field_path);
+          _selectedFields = CAR_LOG_PRESETS[presetName].filter(f => availableFieldPaths.includes(f));
+        }
+        _updatePresetButtons();
+        _updateVarChips();
+        _loadChart();
+      });
+    });
+
+    const varChips = document.querySelectorAll('#carlogVarChips .carlog-var-chip');
+    varChips.forEach(chip => {
+      chip.addEventListener('click', () => {
+        const field = chip.dataset.field;
+        if (_selectedFields.includes(field)) {
+          _selectedFields = _selectedFields.filter(f => f !== field);
+        } else {
+          _selectedFields.push(field);
+        }
+        _activePreset = '';
+        _updatePresetButtons();
+        _updateVarChips();
+        _loadChart();
+      });
+    });
+
+    const timeAxisSelect = document.getElementById('carlogTimeAxis');
+    if (timeAxisSelect) {
+      timeAxisSelect.addEventListener('change', () => {
+        _chartTimeAxis = timeAxisSelect.value;
+        _loadChart();
+      });
+    }
+
+    _updateVarChips();
   }
 
   const routes = {
@@ -1390,13 +1704,16 @@
             toggleFieldsBtn.textContent = expanded ? 'Ocultar campos' : 'Ver todos os campos';
           });
         }
+        _bindChartEvents();
       } catch (e) {
+        _destroyChart();
         contentEl.innerHTML = `<p class="placeholder">Erro ao carregar sess\u00e3o: ${esc(e.message)}</p><button class="btn" onclick="window.location.hash='#car-logs'" style="margin-top:12px;">&#8592; Voltar</button>`;
       }
       if (window.innerWidth <= 768) closeSidebar();
       return;
     }
     const view = routes[hash] || loadDashboard;
+    _destroyChart();
     view();
     if (window.innerWidth <= 768) closeSidebar();
   }
