@@ -34,9 +34,9 @@ tmux new-session -d -s opencode-driver-qwen -x 220 -y 50
 tmux send-keys -t opencode-driver-qwen "opencode -m 'opencode-go/qwen3.6-plus'" Enter
 tmux-wait opencode-driver-qwen "ctrl\+p commands"
 
-# opencode using Qwen 3.6 27B via TPL (TPL:vllm/qwen3.6-27b)
+# opencode using Qwen 3.6 27B via TPL (vllm/qwen3.6-27b)
 tmux new-session -d -s opencode-driver-qwen27B -x 220 -y 50
-tmux send-keys -t opencode-driver-qwen27B "opencode -m 'TPL:vllm/qwen3.6-27b'" Enter
+tmux send-keys -t opencode-driver-qwen27B "opencode -m 'vllm/qwen3.6-27b'" Enter
 tmux-wait opencode-driver-qwen27B "ctrl\+p commands"
 
 # opencode using Minimax 2.7 (opencode-go/minimax-2.7)
@@ -85,7 +85,7 @@ tmux-wait SESSION BUSY_PATTERN [TIMEOUT_SECS]
 | opencode-driver-codex   | `esc interrupt`     | Same opencode UI, but using `github-copilot/gpt-5.3-codex` |
 | opencode-driver-deepseek | `esc interrupt`     | Same opencode UI, but using `opencode-go/deepseek-v4-pro`  |
 | opencode-driver-qwen     | `esc interrupt`     | Same opencode UI, but using `opencode-go/qwen3.6-plus`    |
-| opencode-driver-qwen27B  | `esc interrupt`     | Same opencode UI, but using `TPL:vllm/qwen3.6-27b`         |
+| opencode-driver-qwen27B  | `esc interrupt`     | Same opencode UI, but using `vllm/qwen3.6-27b` (TPL)       |
 | opencode-driver-minimax  | `esc interrupt`     | Same opencode UI, but using `opencode-go/minimax-2.7`      |
 | opencode-driver-kimi     | `esc interrupt`     | Same opencode UI, but using `opencode-go/kimi-k2.6`        |
 | codex                   | `esc to interrupt`  | Shown inline as `• Working (Ns • esc to interrupt)`        |

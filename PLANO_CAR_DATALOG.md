@@ -81,6 +81,7 @@ Adicionar tabelas novas em `backend/database.py`.
 - `last_value REAL`
 - `sample_count INTEGER`
 - `PRIMARY KEY (session_id, field_path)`
+- `FOREIGN KEY (session_id) REFERENCES car_log_sessions(session_id) ON DELETE CASCADE`
 
 Uso:
 
