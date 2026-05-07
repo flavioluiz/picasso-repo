@@ -65,6 +65,12 @@ class CarLogPreviewResponse(BaseModel):
     warnings: List[CarLogPreviewWarning]
 
 
+class CarLogStats(BaseModel):
+    total_sessions: int
+    total_space_bytes: int
+    last_sync_at: Optional[str] = None
+
+
 class Track(BaseModel):
     path: str
     title: Optional[str] = None

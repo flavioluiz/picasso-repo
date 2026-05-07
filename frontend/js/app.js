@@ -55,13 +55,27 @@
   async function loadDashboard() {
     contentEl.innerHTML = '<p class="placeholder">Carregando estatísticas...</p>';
     try {
-      const [tracks, playlists] = await Promise.all([
+      const [tracks, playlists, carStats] = await Promise.all([
         api.get('/api/tracks'),
         api.get('/api/playlists'),
+        carLogApi.getStats().catch(() => null),
       ]);
       const totalSize = Array.isArray(tracks) ? tracks.reduce((sum, t) => sum + (t.size || 0), 0) : 0;
       const trackCount = Array.isArray(tracks) ? tracks.length : 0;
       const playlistCount = Array.isArray(playlists) ? playlists.length : 0;
+
+      const carTotalSessions = (carStats && carStats.total_sessions) || 0;
+      const carSpace = (carStats && carStats.total_space_bytes) || 0;
+      const carLastSync = (carStats && carStats.last_sync_at) || null;
+
+      let carLastSyncDisplay = '--';
+      if (carLastSync) {
+        try {
+          const d = new Date(carLastSync);
+          carLastSyncDisplay = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' }) +
+            ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        } catch { carLastSyncDisplay = carLastSync; }
+      }
 
       contentEl.innerHTML = `
         <h2 style="margin-top:0;margin-bottom:20px;font-weight:700;">Dashboard</h2>
@@ -79,6 +93,21 @@
             <p class="card-value">${formatBytes(totalSize)}</p>
           </div>
         </div>
+        <h3 class="section-heading">Car Datalog</h3>
+        <div class="cards-grid">
+          <div class="card">
+            <p class="card-title">Sessões de Datalog</p>
+            <p class="card-value">${carTotalSessions}</p>
+          </div>
+          <div class="card">
+            <p class="card-title">Espaço Usado</p>
+            <p class="card-value">${formatBytes(carSpace)}</p>
+          </div>
+          <div class="card">
+            <p class="card-title">Último Sync</p>
+            <p class="card-value" style="font-size:1.2rem;">${carLastSyncDisplay}</p>
+          </div>
+        </div>
         <button class="btn btn-primary" id="syncBtn">&#128260; Sincronizar Repositório</button>
         <p id="syncMsg" style="margin-top:12px;color:var(--text-secondary);"></p>
       `;
@@ -88,7 +117,10 @@
         msgEl.textContent = 'Sincronizando...';
         try {
           const res = await api.post('/api/sync');
-          msgEl.textContent = `Sincronizado! ${res.synced_tracks} faixas, ${res.synced_playlists} playlists.`;
+          const parts = [`${res.synced_tracks} faixas`, `${res.synced_playlists} playlists`];
+          if (res.synced_car_log_sessions != null) parts.push(`${res.synced_car_log_sessions} sessões de datalog`);
+          if (res.updated_car_log_sessions != null && res.updated_car_log_sessions > 0) parts.push(`${res.updated_car_log_sessions} atualizadas`);
+          msgEl.textContent = `Sincronizado! ${parts.join(', ')}.`;
           loadDashboard();
         } catch (e) {
           msgEl.textContent = 'Erro: ' + e.message;

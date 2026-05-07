@@ -951,3 +951,86 @@ def test_preview_empty_lines_not_counted_as_invalid():
     assert data["sample_count"] == 3
     assert data["invalid_lines"] == 0
     assert data["total_lines"] >= 3
+
+
+# --- Stats endpoint tests (Commit 10) ---
+
+
+def test_stats_endpoint_empty():
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/stats")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_sessions"] == 0
+    assert data["total_space_bytes"] == 0
+    assert data["last_sync_at"] is None
+
+
+def test_stats_endpoint_returns_counts():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", [_sample()])
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/stats")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_sessions"] == 1
+    assert data["total_space_bytes"] > 0
+    assert data["last_sync_at"] is not None
+
+
+def test_stats_endpoint_multiple_sessions():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    for i in range(3):
+        _write_jsonl(d / f"s{i}.jsonl", [_sample()])
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/stats")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_sessions"] == 3
+    assert data["total_space_bytes"] > 0
+
+
+def test_stats_endpoint_last_sync_updated():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", [_sample()])
+    c = _client()
+    _sync(c)
+    resp1 = c.get("/api/car-logs/stats")
+    assert resp1.status_code == 200
+    first_sync = resp1.json()["last_sync_at"]
+    assert first_sync is not None
+
+    import time
+    time.sleep(0.05)
+
+    second_samples = [_sample(), _sample(overrides={"logged_at": "2026-05-07T10:22:56.883400+00:00"})]
+    _write_jsonl(d / "s2.jsonl", second_samples)
+    _sync(c)
+    resp2 = c.get("/api/car-logs/stats")
+    assert resp2.status_code == 200
+    second_sync = resp2.json()["last_sync_at"]
+    assert second_sync is not None
+    assert second_sync >= first_sync
+
+
+def test_stats_endpoint_space_sums_all_sessions():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", [_sample()])
+    _write_jsonl(d / "s2.jsonl", [_sample(), _sample(overrides={"logged_at": "2026-05-07T10:22:56.883400+00:00"})])
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/stats")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_sessions"] == 2
+    assert data["total_space_bytes"] > 0
+    s1_size = (d / "s1.jsonl").stat().st_size
+    s2_size = (d / "s2.jsonl").stat().st_size
+    assert data["total_space_bytes"] == s1_size + s2_size

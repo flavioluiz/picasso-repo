@@ -35,6 +35,9 @@ const api = {
 };
 
 const carLogApi = {
+  getStats() {
+    return api.get('/api/car-logs/stats');
+  },
   listSessions(params) {
     const qs = new URLSearchParams();
     if (params.device) qs.set('device', params.device);

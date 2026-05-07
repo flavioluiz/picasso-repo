@@ -563,6 +563,15 @@ body.player-active .content {
   .header-title { font-size: 1.05rem; }
 }
 
+/* Dashboard section headings */
+.section-heading {
+  margin: 28px 0 14px;
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--text-secondary);
+  letter-spacing: 0.3px;
+}
+
 /* Car Datalog */
 .carlog-filters {
   display: flex;

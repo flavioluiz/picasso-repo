@@ -18,6 +18,7 @@ from backend.models import (
     CarLogSeriesResponse,
     CarLogPreviewWarning,
     CarLogPreviewResponse,
+    CarLogStats,
 )
 
 router = APIRouter()
@@ -56,6 +57,27 @@ def _row_to_field_stats(row: sqlite3.Row) -> CarLogFieldStats:
         last_value=row["last_value"],
         sample_count=row["sample_count"],
     )
+
+
+@router.get("/car-logs/stats", response_model=CarLogStats)
+async def get_car_log_stats():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute("SELECT COUNT(*) AS cnt, COALESCE(SUM(file_size), 0) AS total_size FROM car_log_sessions")
+        row = cur.fetchone()
+        total_sessions = row["cnt"]
+        total_space_bytes = row["total_size"]
+        cur = conn.execute("SELECT MAX(updated_at) AS last_sync FROM car_log_sessions")
+        row2 = cur.fetchone()
+        last_sync_at = row2["last_sync"]
+        return CarLogStats(
+            total_sessions=total_sessions,
+            total_space_bytes=total_space_bytes,
+            last_sync_at=last_sync_at,
+        )
+    finally:
+        conn.close()
 
 
 @router.get("/car-logs/sessions", response_model=list[CarLogSessionSummary])
