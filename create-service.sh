@@ -96,6 +96,7 @@ fi
 AUTHORIZED_KEYS_FILE="$(cd "$(dirname "$AUTHORIZED_KEYS_FILE")" && pwd)/$(basename "$AUTHORIZED_KEYS_FILE")"
 
 TS_STATE_VOLUME="${SERVICE_NAME}-tailscale-state"
+SSH_HOSTKEYS_VOLUME="${SERVICE_NAME}-ssh-hostkeys"
 APP_CONTAINER="app-${SERVICE_NAME}"
 TS_CONTAINER="ts-${SERVICE_NAME}"
 
@@ -124,6 +125,7 @@ run_podman build -t "$IMAGE_NAME" -f "$CONTAINERFILE" "$PROJECT_DIR"
 
 echo "Creating persistent volumes..."
 run_podman volume create "$TS_STATE_VOLUME" >/dev/null 2>&1 || true
+run_podman volume create "$SSH_HOSTKEYS_VOLUME" >/dev/null 2>&1 || true
 
 echo "Removing previous pod, if it exists..."
 run_podman pod rm -f "$SERVICE_NAME" >/dev/null 2>&1 || true
@@ -138,6 +140,7 @@ app_args=(
   --security-opt label=disable
   -e "WEB_PORT=$APP_PORT"
   -e "REPOSITORY_DIR=/repository"
+  -v "${SSH_HOSTKEYS_VOLUME}:/etc/ssh:Z"
   -v "${DATA_DIR_HOST}:/repository:Z"
   -v "${AUTHORIZED_KEYS_FILE}:/authorized_keys:ro"
 )
@@ -183,6 +186,7 @@ Web port:             $APP_PORT
 Repository dir:       $DATA_DIR_HOST
 Authorized keys file: $AUTHORIZED_KEYS_FILE
 TS state volume:      $TS_STATE_VOLUME
+SSH hostkeys volume:  $SSH_HOSTKEYS_VOLUME
 Tailscale authkey:    $([[ -n "$TS_AUTHKEY" ]] && echo "provided" || echo "reused existing state")
 
 Checks:
@@ -199,4 +203,5 @@ SSH:
 Cleanup:
   $PODMAN_BIN pod rm -f $SERVICE_NAME
   $PODMAN_BIN volume rm $TS_STATE_VOLUME
+  $PODMAN_BIN volume rm $SSH_HOSTKEYS_VOLUME
 EOF

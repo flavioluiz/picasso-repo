@@ -8,6 +8,8 @@ REPOSITORY_DIR="${REPOSITORY_DIR:-/repository}"
 mkdir -p /root/.ssh /run/sshd /repository
 chmod 700 /root/.ssh
 
+ssh-keygen -A
+
 if [[ -f "$AUTHORIZED_KEYS_FILE" ]]; then
   cp "$AUTHORIZED_KEYS_FILE" /root/.ssh/authorized_keys
 elif [[ -n "${AUTHORIZED_KEYS:-}" ]]; then

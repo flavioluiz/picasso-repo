@@ -1,7 +1,6 @@
 FROM docker.io/alpine:3.20
 
 RUN apk add --no-cache bash openssh-server python3 py3-pip rsync shadow tzdata ffmpeg nodejs \
-  && ssh-keygen -A \
   && mkdir -p /repository /root/.ssh /run/sshd /app /app/data \
   && chmod 700 /root/.ssh
 
