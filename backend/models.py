@@ -38,11 +38,6 @@ class CarLogSessionDetail(CarLogSessionSummary):
     fields: List[CarLogFieldStats] = Field(default_factory=list)
 
 
-class CarLogSeriesPoint(BaseModel):
-    t: float
-    v: float
-
-
 class CarLogSeries(BaseModel):
     field: str
     label: str
@@ -51,7 +46,7 @@ class CarLogSeries(BaseModel):
 
 
 class CarLogSeriesResponse(BaseModel):
-    session: dict
+    session: CarLogSessionSummary
     time_axis: str
     series: List[CarLogSeries]
 

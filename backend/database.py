@@ -43,7 +43,8 @@ def init_db():
                 avg_value REAL,
                 last_value REAL,
                 sample_count INTEGER,
-                PRIMARY KEY (session_id, field_path)
+                PRIMARY KEY (session_id, field_path),
+                FOREIGN KEY (session_id) REFERENCES car_log_sessions(session_id) ON DELETE CASCADE
             );
             CREATE TABLE IF NOT EXISTS tracks (
                 path TEXT PRIMARY KEY,
