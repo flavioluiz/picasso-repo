@@ -630,3 +630,118 @@ body.player-active .content {
   background: rgba(127,127,127,0.12);
   color: var(--text);
 }
+
+.carlog-detail-header {
+  margin-bottom: 24px;
+}
+
+.carlog-detail-badges {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.carlog-detail-section {
+  margin-bottom: 28px;
+}
+
+.carlog-detail-heading {
+  margin: 0 0 14px;
+  font-weight: 600;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+}
+
+.carlog-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.carlog-meta-card {
+  padding: 14px 16px;
+}
+
+.carlog-meta-value {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.carlog-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.carlog-summary-card {
+  padding: 14px 16px;
+  border-left: 3px solid var(--accent);
+}
+
+.carlog-summary-card.carlog-stat-speed {
+  border-left-color: #3b82f6;
+}
+
+.carlog-summary-card.carlog-stat-rpm {
+  border-left-color: #f59e0b;
+}
+
+.carlog-summary-card.carlog-stat-coolant {
+  border-left-color: #ef4444;
+}
+
+.carlog-summary-card.carlog-stat-voltage {
+  border-left-color: #10b981;
+}
+
+.carlog-summary-card.carlog-stat-consumption {
+  border-left-color: #8b5cf6;
+}
+
+.carlog-summary-value {
+  margin: 0;
+  font-size: 1.4rem;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.carlog-gps-fix {
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.carlog-fields-collapsed {
+  display: none;
+}
+
+.carlog-fields-expanded {
+  display: block;
+}
+
+.carlog-field-path {
+  font-family: monospace;
+  font-size: 0.82rem;
+}
+
+@media (max-width: 768px) {
+  .carlog-meta-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .carlog-summary-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 420px) {
+  .carlog-meta-grid {
+    grid-template-columns: 1fr;
+  }
+  .carlog-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}

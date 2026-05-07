@@ -1227,6 +1227,127 @@
     });
   }
 
+  function _carLogSummaryFields(fields) {
+    if (!Array.isArray(fields)) return [];
+    const lookup = {};
+    fields.forEach(f => { lookup[f.field_path] = f; });
+    const summary = [];
+    const speed = lookup['direct.speed_kmh'];
+    if (speed && speed.max_value != null) {
+      summary.push({ label: 'Velocidade m\u00e1x', value: speed.max_value.toFixed(1) + ' km/h', css: 'carlog-stat-speed' });
+    }
+    const rpm = lookup['direct.rpm'];
+    if (rpm && rpm.max_value != null) {
+      summary.push({ label: 'RPM m\u00e1x', value: rpm.max_value.toFixed(0), css: 'carlog-stat-rpm' });
+    }
+    const coolant = lookup['direct.coolant_temp_c'];
+    if (coolant && coolant.max_value != null) {
+      summary.push({ label: 'Coolant m\u00e1x', value: coolant.max_value.toFixed(1) + ' \u00b0C', css: 'carlog-stat-coolant' });
+    }
+    const voltageField = fields.find(f => /volt/i.test(f.field_path) && f.min_value != null);
+    if (voltageField) {
+      summary.push({ label: 'Tens\u00e3o m\u00edn', value: voltageField.min_value.toFixed(2) + ' V', css: 'carlog-stat-voltage' });
+    }
+    const consumption = lookup['inferred.instant_km_l'];
+    if (consumption && consumption.avg_value != null) {
+      summary.push({ label: 'Consumo m\u00e9dio', value: consumption.avg_value.toFixed(2) + ' km/l', css: 'carlog-stat-consumption' });
+    }
+    return summary;
+  }
+
+  function renderCarLogSessionDetail(session) {
+    const fields = Array.isArray(session.fields) ? session.fields : [];
+    const summaryItems = _carLogSummaryFields(fields);
+    const gpsBadge = session.gps_seen ? '<span class="carlog-badge carlog-gps" title="GPS dispon\u00edvel">&#127757; GPS</span>' : '';
+    const gpsFixBadge = session.gps_fix_seen ? '<span class="carlog-badge carlog-gps-fix" title="GPS com fix">&#128205; Fix</span>' : '';
+    const wifiBadge = session.wifi_seen ? '<span class="carlog-badge carlog-wifi" title="Wi-Fi visto">&#128246; Wi-Fi</span>' : '';
+    const badges = gpsBadge + gpsFixBadge + wifiBadge;
+
+    let summaryHtml = '';
+    if (summaryItems.length) {
+      summaryHtml = `
+        <div class="carlog-detail-section">
+          <h3 class="carlog-detail-heading">Resumo</h3>
+          <div class="carlog-summary-grid">
+            ${summaryItems.map(s => `
+              <div class="card carlog-summary-card ${s.css}">
+                <p class="card-title">${esc(s.label)}</p>
+                <p class="carlog-summary-value">${esc(s.value)}</p>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    let fieldsHtml = '';
+    if (fields.length) {
+      fieldsHtml = `
+        <div class="carlog-detail-section">
+          <h3 class="carlog-detail-heading" style="margin-bottom:10px;">
+            Campos dispon\u00edveis (${fields.length})
+            <button class="btn" id="carLogToggleFields" style="margin-left:12px;padding:4px 12px;font-size:0.82rem;background:var(--surface);border:1px solid var(--border);">Ver todos os campos</button>
+          </h3>
+          <div id="carLogFieldsTable" class="carlog-fields-collapsed">
+            <div class="table-wrap"><table><thead><tr><th>Campo</th><th>M\u00edn</th><th>M\u00e1x</th><th>M\u00e9dia</th><th>\u00daltimo</th><th>Amostras</th></tr></thead><tbody>
+              ${fields.map(f => `<tr><td class="carlog-field-path">${esc(f.field_path)}</td><td>${f.min_value != null ? f.min_value.toFixed(2) : '--'}</td><td>${f.max_value != null ? f.max_value.toFixed(2) : '--'}</td><td>${f.avg_value != null ? f.avg_value.toFixed(2) : '--'}</td><td>${f.last_value != null ? f.last_value.toFixed(2) : '--'}</td><td>${f.sample_count != null ? f.sample_count : '--'}</td></tr>`).join('')}
+            </tbody></table></div>
+          </div>
+        </div>
+      `;
+    }
+
+    return `
+      <div class="carlog-detail-header">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <button class="btn" id="carLogDetailBack" style="background:var(--surface);border:1px solid var(--border);">&#8592; Voltar</button>
+          <h2 style="margin:0;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(session.session_id)}</h2>
+        </div>
+        <div class="carlog-detail-badges">
+          ${badges}
+          <a class="btn btn-primary" href="${carLogApi.rawUrl(session.session_id)}" download style="font-size:0.88rem;padding:6px 14px;">&#11015; Baixar JSONL</a>
+        </div>
+      </div>
+
+      <div class="carlog-detail-section">
+        <h3 class="carlog-detail-heading">Sess\u00e3o</h3>
+        <div class="carlog-meta-grid">
+          <div class="card carlog-meta-card">
+            <p class="card-title">Device</p>
+            <p class="carlog-meta-value">${esc(session.device_name)}</p>
+          </div>
+          <div class="card carlog-meta-card">
+            <p class="card-title">VIN</p>
+            <p class="carlog-meta-value">${esc(session.vin || '--')}</p>
+          </div>
+          <div class="card carlog-meta-card">
+            <p class="card-title">In\u00edcio</p>
+            <p class="carlog-meta-value">${formatCarTimestamp(session.started_at)}</p>
+          </div>
+          <div class="card carlog-meta-card">
+            <p class="card-title">Fim</p>
+            <p class="carlog-meta-value">${formatCarTimestamp(session.ended_at)}</p>
+          </div>
+          <div class="card carlog-meta-card">
+            <p class="card-title">Dura\u00e7\u00e3o</p>
+            <p class="carlog-meta-value">${formatCarDuration(session.duration_s)}</p>
+          </div>
+          <div class="card carlog-meta-card">
+            <p class="card-title">Amostras</p>
+            <p class="carlog-meta-value">${session.sample_count}</p>
+          </div>
+          <div class="card carlog-meta-card">
+            <p class="card-title">Tamanho</p>
+            <p class="carlog-meta-value">${formatBytes(session.file_size)}</p>
+          </div>
+        </div>
+      </div>
+
+      ${summaryHtml}
+      ${fieldsHtml}
+    `;
+  }
+
   async function loadCarLogs() {
     contentEl.innerHTML = `
       <h2 style="margin-top:0;margin-bottom:20px;font-weight:700;">Car Datalog</h2>
@@ -1259,32 +1380,16 @@
       contentEl.innerHTML = '<p class="placeholder">Carregando sess\u00e3o...</p>';
       try {
         const session = await carLogApi.getSession(sessionId);
-        contentEl.innerHTML = `
-          <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
-            <button class="btn" id="carLogDetailBack" style="background:var(--surface);border:1px solid var(--border);">&#8592; Voltar</button>
-            <h2 style="margin:0;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(session.session_id)}</h2>
-          </div>
-          <div class="cards-grid" style="margin-bottom:20px;">
-            <div class="card"><p class="card-title">Device</p><p class="card-value" style="font-size:1.1rem;">${esc(session.device_name)}</p></div>
-            <div class="card"><p class="card-title">VIN</p><p class="card-value" style="font-size:1.1rem;">${esc(session.vin || '--')}</p></div>
-            <div class="card"><p class="card-title">In\u00edcio</p><p class="card-value" style="font-size:1.1rem;">${formatCarTimestamp(session.started_at)}</p></div>
-            <div class="card"><p class="card-title">Dura\u00e7\u00e3o</p><p class="card-value" style="font-size:1.1rem;">${formatCarDuration(session.duration_s)}</p></div>
-            <div class="card"><p class="card-title">Amostras</p><p class="card-value" style="font-size:1.1rem;">${session.sample_count}</p></div>
-            <div class="card"><p class="card-title">Tamanho</p><p class="card-value" style="font-size:1.1rem;">${formatBytes(session.file_size)}</p></div>
-          </div>
-          <div style="display:flex;gap:8px;margin-bottom:20px;">
-            ${session.gps_seen ? '<span class="carlog-badge carlog-gps">&#127757; GPS</span>' : ''}
-            ${session.wifi_seen ? '<span class="carlog-badge carlog-wifi">&#128246; Wi-Fi</span>' : ''}
-            <a class="btn btn-primary" href="${carLogApi.rawUrl(session.session_id)}" download style="font-size:0.92rem;">&#11015; Baixar JSONL</a>
-          </div>
-          ${Array.isArray(session.fields) && session.fields.length ? `
-          <h3 style="margin:0 0 10px;font-weight:600;font-size:1rem;">Campos dispon\u00edveis</h3>
-          <div class="table-wrap"><table><thead><tr><th>Campo</th><th>M\u00edn</th><th>M\u00e1x</th><th>M\u00e9dia</th><th>Amostras</th></tr></thead><tbody>
-            ${session.fields.map(f => `<tr><td>${esc(f.field_path)}</td><td>${f.min_value != null ? f.min_value.toFixed(2) : '--'}</td><td>${f.max_value != null ? f.max_value.toFixed(2) : '--'}</td><td>${f.avg_value != null ? f.avg_value.toFixed(2) : '--'}</td><td>${f.sample_count != null ? f.sample_count : '--'}</td></tr>`).join('')}
-          </tbody></table></div>
-          ` : ''}
-        `;
+        contentEl.innerHTML = renderCarLogSessionDetail(session);
         document.getElementById('carLogDetailBack').addEventListener('click', () => { window.location.hash = '#car-logs'; });
+        const toggleFieldsBtn = document.getElementById('carLogToggleFields');
+        const fieldsTable = document.getElementById('carLogFieldsTable');
+        if (toggleFieldsBtn && fieldsTable) {
+          toggleFieldsBtn.addEventListener('click', () => {
+            const expanded = fieldsTable.classList.toggle('carlog-fields-expanded');
+            toggleFieldsBtn.textContent = expanded ? 'Ocultar campos' : 'Ver todos os campos';
+          });
+        }
       } catch (e) {
         contentEl.innerHTML = `<p class="placeholder">Erro ao carregar sess\u00e3o: ${esc(e.message)}</p><button class="btn" onclick="window.location.hash='#car-logs'" style="margin-top:12px;">&#8592; Voltar</button>`;
       }
