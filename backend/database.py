@@ -13,6 +13,38 @@ def init_db():
     try:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.executescript("""
+            CREATE TABLE IF NOT EXISTS car_log_sessions (
+                session_id TEXT PRIMARY KEY,
+                device_name TEXT NOT NULL,
+                vin TEXT,
+                vehicle TEXT,
+                relative_path TEXT NOT NULL UNIQUE,
+                file_size INTEGER NOT NULL,
+                sample_count INTEGER NOT NULL,
+                started_at TEXT,
+                ended_at TEXT,
+                duration_s REAL,
+                first_logged_at TEXT,
+                last_logged_at TEXT,
+                first_sample_time TEXT,
+                last_sample_time TEXT,
+                wifi_seen BOOLEAN,
+                gps_seen BOOLEAN,
+                gps_fix_seen BOOLEAN,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                scan_mtime REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS car_log_session_fields (
+                session_id TEXT NOT NULL,
+                field_path TEXT NOT NULL,
+                min_value REAL,
+                max_value REAL,
+                avg_value REAL,
+                last_value REAL,
+                sample_count INTEGER,
+                PRIMARY KEY (session_id, field_path)
+            );
             CREATE TABLE IF NOT EXISTS tracks (
                 path TEXT PRIMARY KEY,
                 title TEXT,

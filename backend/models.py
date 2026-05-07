@@ -1,6 +1,59 @@
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
+
+
+class CarLogSessionSummary(BaseModel):
+    session_id: str
+    device_name: str
+    vin: Optional[str] = None
+    vehicle: Optional[str] = None
+    relative_path: str
+    file_size: int
+    sample_count: int
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
+    duration_s: Optional[float] = None
+    first_logged_at: Optional[str] = None
+    last_logged_at: Optional[str] = None
+    first_sample_time: Optional[str] = None
+    last_sample_time: Optional[str] = None
+    wifi_seen: Optional[bool] = None
+    gps_seen: Optional[bool] = None
+    gps_fix_seen: Optional[bool] = None
+    created_at: str
+    updated_at: str
+
+
+class CarLogFieldStats(BaseModel):
+    field_path: str
+    min_value: Optional[float] = None
+    max_value: Optional[float] = None
+    avg_value: Optional[float] = None
+    last_value: Optional[float] = None
+    sample_count: Optional[int] = None
+
+
+class CarLogSessionDetail(CarLogSessionSummary):
+    fields: List[CarLogFieldStats] = Field(default_factory=list)
+
+
+class CarLogSeriesPoint(BaseModel):
+    t: float
+    v: float
+
+
+class CarLogSeries(BaseModel):
+    field: str
+    label: str
+    unit: Optional[str] = None
+    points: List[List[float]] = Field(default_factory=list)
+
+
+class CarLogSeriesResponse(BaseModel):
+    session: dict
+    time_axis: str
+    series: List[CarLogSeries]
 
 
 class Track(BaseModel):
