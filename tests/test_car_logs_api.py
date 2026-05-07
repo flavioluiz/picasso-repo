@@ -299,3 +299,354 @@ def test_download_raw_rejects_path_traversal():
     conn.close()
     resp = c.get("/api/car-logs/sessions/s1/raw")
     assert resp.status_code == 404
+
+
+# --- Series endpoint tests ---
+
+
+def _make_series_samples(count, start_time="2026-05-07T10:21:55.000000+00:00", interval_s=1.0, overrides=None):
+    from datetime import datetime, timezone, timedelta
+    base_dt = datetime.fromisoformat(start_time)
+    samples = []
+    for i in range(count):
+        ts = base_dt + timedelta(seconds=interval_s * i)
+        ts_str = ts.isoformat()
+        s = _sample(overrides={
+            "logged_at": ts_str,
+            "time_context": {
+                "sample_time": ts_str,
+                "logged_at": ts_str,
+                "wifi_connected": i % 2 == 0,
+                "gps_connected": False,
+                "gps_has_fix": False,
+            },
+            "direct": {
+                "rpm": 800.0 + i * 100,
+                "speed_kmh": 0 + i * 5,
+                "coolant_temp_c": 70 + i,
+            },
+        })
+        samples.append(s)
+    return samples
+
+
+def test_series_endpoint_returns_data():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", _make_series_samples(5))
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "direct.rpm"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "session" in data
+    assert "time_axis" in data
+    assert "series" in data
+    assert data["time_axis"] == "relative_s"
+    assert len(data["series"]) == 1
+    assert data["series"][0]["field"] == "direct.rpm"
+    assert len(data["series"][0]["points"]) == 5
+
+
+def test_series_multiple_fields():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", _make_series_samples(5))
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "direct.rpm,direct.speed_kmh"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["series"]) == 2
+    fields = [s["field"] for s in data["series"]]
+    assert "direct.rpm" in fields
+    assert "direct.speed_kmh" in fields
+
+
+def test_series_requires_fields_param():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", [_sample()])
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series")
+    assert resp.status_code == 422
+
+
+def test_series_empty_fields_returns_400():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", [_sample()])
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": " , , "})
+    assert resp.status_code == 400
+
+
+def test_series_invalid_time_axis_returns_400():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", [_sample()])
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "direct.rpm", "time_axis": "invalid"})
+    assert resp.status_code == 400
+
+
+def test_series_session_not_found():
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/nonexistent/series", params={"fields": "direct.rpm"})
+    assert resp.status_code == 404
+
+
+def test_series_relative_s_starts_at_zero():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", _make_series_samples(5, interval_s=1.0))
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "direct.rpm", "time_axis": "relative_s"})
+    assert resp.status_code == 200
+    data = resp.json()
+    points = data["series"][0]["points"]
+    assert abs(points[0][0]) < 0.001
+
+
+def test_series_relative_s_intervals():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", _make_series_samples(5, interval_s=2.0))
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "direct.rpm", "time_axis": "relative_s"})
+    assert resp.status_code == 200
+    data = resp.json()
+    points = data["series"][0]["points"]
+    assert len(points) == 5
+    assert abs(points[1][0] - 2.0) < 0.01
+    assert abs(points[2][0] - 4.0) < 0.01
+
+
+def test_series_sample_time_is_unix_timestamp():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", _make_series_samples(3))
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "direct.rpm", "time_axis": "sample_time"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["time_axis"] == "sample_time"
+    points = data["series"][0]["points"]
+    assert points[0][0] > 1e9
+
+
+def test_series_logged_at_is_unix_timestamp():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", _make_series_samples(3))
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "direct.rpm", "time_axis": "logged_at"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["time_axis"] == "logged_at"
+    points = data["series"][0]["points"]
+    assert points[0][0] > 1e9
+
+
+def test_series_downsampling_respects_max_points():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", _make_series_samples(100, interval_s=1.0))
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "direct.rpm", "max_points": 10})
+    assert resp.status_code == 200
+    data = resp.json()
+    points = data["series"][0]["points"]
+    assert len(points) <= 11
+
+
+def test_series_downsampling_includes_first_and_last():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", _make_series_samples(50, interval_s=1.0))
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "direct.rpm", "max_points": 10})
+    assert resp.status_code == 200
+    data = resp.json()
+    points = data["series"][0]["points"]
+    first_ts = points[0][0]
+    last_ts = points[-1][0]
+    assert first_ts < last_ts
+
+
+def test_series_boolean_to_numeric():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    samples = []
+    for i in range(3):
+        s = _sample(overrides={
+            "logged_at": f"2026-05-07T10:21:5{i}:00.000000+00:00",
+            "time_context": {
+                "sample_time": f"2026-05-07T10:21:5{i}:00.000000+00:00",
+                "logged_at": f"2026-05-07T10:21:5{i}:00.000000+00:00",
+                "wifi_connected": i % 2 == 0,
+                "gps_connected": False,
+                "gps_has_fix": False,
+            },
+            "wifi": {"connected": i % 2 == 0},
+        })
+        samples.append(s)
+    _write_jsonl(d / "s1.jsonl", samples)
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "wifi.connected"})
+    assert resp.status_code == 200
+    data = resp.json()
+    points = data["series"][0]["points"]
+    values = [p[1] for p in points]
+    assert all(v in (0.0, 1.0) for v in values)
+
+
+def test_series_label_and_unit_mapping():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", _make_series_samples(3))
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "direct.rpm,direct.speed_kmh,direct.coolant_temp_c"})
+    assert resp.status_code == 200
+    data = resp.json()
+    series_map = {s["field"]: s for s in data["series"]}
+    assert series_map["direct.rpm"]["label"] == "RPM"
+    assert series_map["direct.rpm"]["unit"] == "rpm"
+    assert series_map["direct.speed_kmh"]["label"] == "Speed"
+    assert series_map["direct.speed_kmh"]["unit"] == "km/h"
+    assert series_map["direct.coolant_temp_c"]["label"] == "Coolant Temp"
+    assert series_map["direct.coolant_temp_c"]["unit"] == "\u00b0C"
+
+
+def test_series_label_and_unit_fallback_for_unknown_field():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", _make_series_samples(3))
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "direct.some_random_field"})
+    assert resp.status_code == 200
+    data = resp.json()
+    s = data["series"][0]
+    assert s["label"] == "Some Random Field"
+
+
+def test_series_response_matches_model():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", _make_series_samples(3))
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "direct.rpm"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "session" in data
+    assert "session_id" in data["session"]
+    assert "started_at" in data["session"]
+    assert "sample_count" in data["session"]
+    assert data["time_axis"] == "relative_s"
+    assert isinstance(data["series"], list)
+    for s in data["series"]:
+        assert "field" in s
+        assert "label" in s
+        assert "unit" in s
+        assert "points" in s
+        assert isinstance(s["points"], list)
+        for p in s["points"]:
+            assert isinstance(p, list)
+            assert len(p) == 2
+            assert isinstance(p[0], (int, float))
+            assert isinstance(p[1], (int, float))
+
+
+def test_series_points_are_floats():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", _make_series_samples(3))
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "direct.rpm,direct.speed_kmh"})
+    assert resp.status_code == 200
+    data = resp.json()
+    for s in data["series"]:
+        for p in s["points"]:
+            assert isinstance(p[0], float)
+            assert isinstance(p[1], float)
+
+
+def test_series_max_points_default_is_1000():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", _make_series_samples(50))
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "direct.rpm"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["series"][0]["points"]) == 50
+
+
+def test_series_no_downsampling_when_under_max_points():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", _make_series_samples(10))
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "direct.rpm", "max_points": 100})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["series"][0]["points"]) == 10
+
+
+def test_series_missing_field_returns_empty_points():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", _make_series_samples(3))
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "direct.nonexistent_field"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["series"]) == 1
+    assert data["series"][0]["field"] == "direct.nonexistent_field"
+    assert data["series"][0]["points"] == []
+
+
+def test_series_session_metadata_in_response():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", _make_series_samples(3))
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "direct.rpm"})
+    assert resp.status_code == 200
+    data = resp.json()
+    session = data["session"]
+    assert session["session_id"] == "s1"
+    assert session["sample_count"] == 3
+    assert session["started_at"] is not None
+
+
+def test_series_integer_values_converted_to_float():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", _make_series_samples(3))
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/series", params={"fields": "direct.speed_kmh"})
+    assert resp.status_code == 200
+    data = resp.json()
+    for p in data["series"][0]["points"]:
+        assert isinstance(p[1], float)
