@@ -187,20 +187,30 @@ def sync_car_datalog(db: sqlite3.Connection, repo_dir: Path) -> Tuple[int, int]:
     disk_session_ids: set[str] = set()
 
     for file_path in jsonl_files:
+        session_id = file_path.stem
+        disk_session_ids.add(session_id)
+
+        try:
+            stat = file_path.stat()
+        except OSError:
+            logger.warning("Failed to stat car datalog file: %s", file_path, exc_info=True)
+            continue
+
+        cur = db.execute(
+            "SELECT file_size, scan_mtime FROM car_log_sessions "
+            "WHERE session_id = ?",
+            (session_id,),
+        )
+        row = cur.fetchone()
+
+        if row is not None and row[0] == stat.st_size and row[1] == stat.st_mtime:
+            continue
+
         try:
             session, field_records = _parse_jsonl_file(file_path, repo_dir)
         except Exception:
             logger.warning("Failed to parse car datalog file: %s", file_path, exc_info=True)
             continue
-
-        disk_session_ids.add(session["session_id"])
-
-        cur = db.execute(
-            "SELECT file_size, scan_mtime FROM car_log_sessions "
-            "WHERE session_id = ?",
-            (session["session_id"],),
-        )
-        row = cur.fetchone()
 
         if row is None:
             db.execute(
@@ -236,44 +246,42 @@ def sync_car_datalog(db: sqlite3.Connection, repo_dir: Path) -> Tuple[int, int]:
             )
             synced += 1
         else:
-            old_size, old_mtime = row
-            if session["file_size"] != old_size or session["scan_mtime"] != old_mtime:
-                db.execute(
-                    """UPDATE car_log_sessions SET
-                        device_name=?, vin=?, vehicle=?, relative_path=?,
-                        file_size=?, sample_count=?, started_at=?, ended_at=?,
-                        duration_s=?, first_logged_at=?, last_logged_at=?,
-                        first_sample_time=?, last_sample_time=?,
-                        wifi_seen=?, gps_seen=?, gps_fix_seen=?,
-                        updated_at=?, scan_mtime=?
-                    WHERE session_id=?""",
-                    (
-                        session["device_name"],
-                        session["vin"],
-                        session["vehicle"],
-                        session["relative_path"],
-                        session["file_size"],
-                        session["sample_count"],
-                        session["started_at"],
-                        session["ended_at"],
-                        session["duration_s"],
-                        session["first_logged_at"],
-                        session["last_logged_at"],
-                        session["first_sample_time"],
-                        session["last_sample_time"],
-                        session["wifi_seen"],
-                        session["gps_seen"],
-                        session["gps_fix_seen"],
-                        now,
-                        session["scan_mtime"],
-                        session["session_id"],
-                    ),
-                )
-                db.execute(
-                    "DELETE FROM car_log_session_fields WHERE session_id = ?",
-                    (session["session_id"],),
-                )
-                updated += 1
+            db.execute(
+                """UPDATE car_log_sessions SET
+                    device_name=?, vin=?, vehicle=?, relative_path=?,
+                    file_size=?, sample_count=?, started_at=?, ended_at=?,
+                    duration_s=?, first_logged_at=?, last_logged_at=?,
+                    first_sample_time=?, last_sample_time=?,
+                    wifi_seen=?, gps_seen=?, gps_fix_seen=?,
+                    updated_at=?, scan_mtime=?
+                WHERE session_id=?""",
+                (
+                    session["device_name"],
+                    session["vin"],
+                    session["vehicle"],
+                    session["relative_path"],
+                    session["file_size"],
+                    session["sample_count"],
+                    session["started_at"],
+                    session["ended_at"],
+                    session["duration_s"],
+                    session["first_logged_at"],
+                    session["last_logged_at"],
+                    session["first_sample_time"],
+                    session["last_sample_time"],
+                    session["wifi_seen"],
+                    session["gps_seen"],
+                    session["gps_fix_seen"],
+                    now,
+                    session["scan_mtime"],
+                    session["session_id"],
+                ),
+            )
+            db.execute(
+                "DELETE FROM car_log_session_fields WHERE session_id = ?",
+                (session["session_id"],),
+            )
+            updated += 1
 
         for field in field_records:
             db.execute(

@@ -485,3 +485,44 @@ def test_sync_returns_tuple(repo_dir):
         assert len(result) == 2
     finally:
         conn.close()
+
+
+def test_sync_preserves_session_when_reparse_fails(repo_dir):
+    d = _make_session_dir(repo_dir)
+    f = d / "s1.jsonl"
+    _write_jsonl(f, [_sample()])
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        sync_car_datalog(conn, repo_dir)
+        cur = conn.execute("SELECT session_id FROM car_log_sessions WHERE session_id = ?", ("s1",))
+        assert cur.fetchone() is not None
+        f.write_text("CORRUPTED NON-JSON CONTENT !!!\n")
+        import time
+        time.sleep(0.05)
+        os.utime(f, (time.time(), time.time()))
+        sync_car_datalog(conn, repo_dir)
+        cur = conn.execute("SELECT session_id FROM car_log_sessions WHERE session_id = ?", ("s1",))
+        assert cur.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def test_sync_skips_unchanged_without_reparse(repo_dir):
+    d = _make_session_dir(repo_dir)
+    f = d / "s1.jsonl"
+    _write_jsonl(f, [_sample()])
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        s1, u1 = sync_car_datalog(conn, repo_dir)
+        assert s1 == 1
+        assert u1 == 0
+        s2, u2 = sync_car_datalog(conn, repo_dir)
+        assert s2 == 0
+        assert u2 == 0
+        cur = conn.execute("SELECT updated_at FROM car_log_sessions WHERE session_id = ?", ("s1",))
+        first_updated = cur.fetchone()[0]
+        cur = conn.execute("SELECT updated_at FROM car_log_sessions WHERE session_id = ?", ("s1",))
+        second_updated = cur.fetchone()[0]
+        assert first_updated == second_updated
+    finally:
+        conn.close()
