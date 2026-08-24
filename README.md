@@ -23,7 +23,7 @@ It also runs a small FastAPI web UI on port 80 for browsing tracks and playlists
 │   └─────────┬────────────┘    └────────────────────────────┘ │
 │             │                                                │
 │             ▼                                                │
-│   ~/Documents/PiCASSO_Repository  →  /repository (in pod)    │
+│   /Volumes/MacSSD/Data/picasso-repository → /repository      │
 │   ├── Musics/        (.mp3)                                  │
 │   └── Playlists/     (.m3u / .m3u8)                          │
 └──────────────────────────────────────────────────────────────┘
@@ -45,7 +45,7 @@ It also runs a small FastAPI web UI on port 80 for browsing tracks and playlists
 The data directory mounted into the pod **must** have this structure:
 
 ```
-~/Documents/PiCASSO_Repository/
+/Volumes/MacSSD/Data/picasso-repository/
 ├── Musics/        # MP3 files (any nested folder structure)
 └── Playlists/     # .m3u / .m3u8 playlists
 ```
@@ -62,7 +62,8 @@ These two folders are what the Pi pulls from:
 - [Podman](https://podman.io/) on the host
 - A [Tailscale](https://tailscale.com/) account (free tier works)
 - A Tailscale **auth key** for the first pod creation (generate one at <https://login.tailscale.com/admin/settings/keys>)
-- An SSH public key that the Pi will use to authenticate (default: `~/.ssh/id_ed25519.pub`)
+- An SSH authorized-keys file that the Pi will use to authenticate (default:
+  `/Volumes/MacSSD/Data/picasso-ssh/authorized_keys`)
 
 ---
 
@@ -83,9 +84,13 @@ By default this:
 
 - Builds the image `localhost/picasso-repo-app:latest` from the `Containerfile`
 - Creates a pod named `picasso-repo`
-- Mounts `~/Documents/PiCASSO_Repository` into the pod at `/repository`
-- Trusts the public key at `~/.ssh/id_ed25519.pub`
+- Mounts `/Volumes/MacSSD/Data/picasso-repository` into the pod at `/repository`
+- Trusts the public keys at `/Volumes/MacSSD/Data/picasso-ssh/authorized_keys`
 - Joins the tailnet under hostname `picasso-repo`
+
+The data directory must already exist. When a path under `/Volumes/MacSSD` is
+used, the script verifies that the encrypted SSD is really mounted and refuses
+to create a fallback directory if it is absent.
 
 Customize via flags:
 

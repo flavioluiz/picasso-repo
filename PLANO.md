@@ -2,7 +2,9 @@
 
 ## Contexto
 
-O repositório está em `~/github/PiCASSO_Repo`. O diretório de dados montado no container é `~/Documents/PiCASSO_Repository` (conforme `create-service.sh`).
+O repositório está em `/Volumes/MacSSD/Development/github/picasso-repo`. O
+diretório de dados montado no container é
+`/Volumes/MacSSD/Data/picasso-repository` (conforme `create-service.sh`).
 
 A arquitetura atual é um container Alpine com SSH/SFTP + um servidor HTTP Python simples (`web-status.py`) servindo uma página estática de estatísticas, orquestrado via Podman com um sidecar Tailscale.
 
@@ -30,7 +32,7 @@ O serviço é pequeno e focado. Separar backend/frontend em containers distintos
 ## 2. Estrutura de Diretórios do Projeto
 
 ```
-~/github/PiCASSO_Repo/
+/Volumes/MacSSD/Development/github/picasso-repo/
 ├── Containerfile
 ├── create-service.sh
 ├── start.sh                      # Substitui start-sshd.sh (inicia sshd + uvicorn)
@@ -68,7 +70,9 @@ O serviço é pequeno e focado. Separar backend/frontend em containers distintos
 
 A maior preocupação é o **desincronamento** entre o SQLite e o filesystem. A solução é tratá-lo como um **índice de leitura**, não como fonte da verdade.
 
-**Fonte da verdade:** O filesystem (`~/Documents/PiCASSO_Repository`) — os arquivos MP3 com suas tags ID3 e os arquivos `.m3u8`.
+**Fonte da verdade:** O filesystem
+(`/Volumes/MacSSD/Data/picasso-repository`) — os arquivos MP3 com suas tags ID3
+e os arquivos `.m3u8`.
 
 **SQLite é um cache acelerado** para busca, listagem e relacionamentos.
 
@@ -254,7 +258,9 @@ A arquitetura foi pensada para ser extensível:
 - O FastAPI permite adicionar novos routers facilmente (`api/car_logger.py`).
 - Novas tabelas no SQLite (`car_logs`, `trips`, etc.).
 - Novas páginas no frontend SPA (`car.html`, `logger.js`).
-- Como o repositório (`~/Documents/PiCASSO_Repository`) é montado no container, o carro pode continuar enviando dados brutos via SFTP/rsync para uma subpasta `/repository/car_data/`. O serviço web lê e processa esses dados.
+- Como o repositório (`/Volumes/MacSSD/Data/picasso-repository`) é montado no
+  container, o carro pode continuar enviando dados brutos via SFTP/rsync para
+  uma subpasta `/repository/car_data/`. O serviço web lê e processa esses dados.
 
 ---
 

@@ -8,15 +8,15 @@ Usage:
 
 Examples:
   ./create-service.sh --authkey tskey-auth-xxxxx
-  ./create-service.sh --service picasso-repo --data-dir ~/Documents/PiCASSO_Repository
+  ./create-service.sh --service picasso-repo --data-dir /Volumes/MacSSD/Data/picasso-repository
   ./create-service.sh --port 80
 
 Defaults:
   --service               picasso-repo
   --image                 localhost/picasso-repo-app:latest
   --port                  80
-  --data-dir              ~/Documents/PiCASSO_Repository
-  --authorized-keys-file  ~/.ssh/id_ed25519.pub
+  --data-dir              /Volumes/MacSSD/Data/picasso-repository
+  --authorized-keys-file  /Volumes/MacSSD/Data/picasso-ssh/authorized_keys
 
 Options:
   --service <name>               Pod and Tailscale hostname
@@ -30,6 +30,7 @@ Options:
 Environment variables:
   CONTAINERFILE                  Containerfile used for the build step (default: ./Containerfile)
   PODMAN_BIN                     Podman binary to use (default: podman)
+  MACSSD_MOUNT_POINT             SSD mount point checked for MacSSD paths (default: /Volumes/MacSSD)
 EOF
 }
 
@@ -37,8 +38,8 @@ SERVICE_NAME="picasso-repo"
 TS_AUTHKEY=""
 IMAGE_NAME=""
 APP_PORT="80"
-DATA_DIR_HOST="${HOME}/Documents/PiCASSO_Repository"
-AUTHORIZED_KEYS_FILE="${HOME}/.ssh/id_ed25519.pub"
+DATA_DIR_HOST="/Volumes/MacSSD/Data/picasso-repository"
+AUTHORIZED_KEYS_FILE="/Volumes/MacSSD/Data/picasso-ssh/authorized_keys"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -85,10 +86,29 @@ fi
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONTAINERFILE="${CONTAINERFILE:-Containerfile}"
 PODMAN_BIN="${PODMAN_BIN:-podman}"
+MACSSD_MOUNT_POINT="${MACSSD_MOUNT_POINT:-/Volumes/MacSSD}"
 
-mkdir -p "$DATA_DIR_HOST"
-DATA_DIR_HOST="$(cd "$(dirname "$DATA_DIR_HOST")" && pwd)/$(basename "$DATA_DIR_HOST")"
+if [[ "$DATA_DIR_HOST" == "$MACSSD_MOUNT_POINT" || "$DATA_DIR_HOST" == "$MACSSD_MOUNT_POINT/"* ]]; then
+  if [[ ! -d "$MACSSD_MOUNT_POINT" ]] ||
+    ! /sbin/mount | grep -Fq " on $MACSSD_MOUNT_POINT ("; then
+    echo "$MACSSD_MOUNT_POINT is not mounted; refusing to create a fallback data directory." >&2
+    exit 1
+  fi
+fi
+if [[ ! -d "$DATA_DIR_HOST" ]]; then
+  echo "Repository directory not found: $DATA_DIR_HOST" >&2
+  echo "Create and populate it before starting the service." >&2
+  exit 1
+fi
+DATA_DIR_HOST="$(cd "$DATA_DIR_HOST" && pwd)"
 
+if [[ "$AUTHORIZED_KEYS_FILE" == "$MACSSD_MOUNT_POINT" || "$AUTHORIZED_KEYS_FILE" == "$MACSSD_MOUNT_POINT/"* ]]; then
+  if [[ ! -d "$MACSSD_MOUNT_POINT" ]] ||
+    ! /sbin/mount | grep -Fq " on $MACSSD_MOUNT_POINT ("; then
+    echo "$MACSSD_MOUNT_POINT is not mounted; refusing to use a fallback authorized-keys file." >&2
+    exit 1
+  fi
+fi
 if [[ ! -f "$AUTHORIZED_KEYS_FILE" ]]; then
   echo "Authorized keys file not found: $AUTHORIZED_KEYS_FILE" >&2
   exit 1

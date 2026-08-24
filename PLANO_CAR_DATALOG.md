@@ -15,7 +15,8 @@ Permitir que o usuario, pela UI web do `picasso-repo`, consiga:
 ## Premissas
 
 - Fonte da verdade: filesystem montado em `/repository`
-- Host tipico: `~/Documents/PiCASSO_Repository` ou equivalente configurado em `--data-dir`
+- Host tipico: `/Volumes/MacSSD/Data/picasso-repository` ou equivalente
+  configurado em `--data-dir`
 - Diretorio de datalog: `/repository/Car_datalog/`
 - Formato de ingestao: `JSONL` bruto, uma linha por snapshot
 - Cada arquivo representa uma sessao
