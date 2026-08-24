@@ -1,14 +1,15 @@
+import csv
+import io
 import json
 import sqlite3
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
-from backend.carlog_scanner import _flatten, _is_numeric
+from backend.carlog_scanner import _correct_clock_timeline, _flatten, _is_numeric, _parse_timestamp
 from backend.config import REPOSITORY_DIR, DB_PATH
 from backend.models import (
     CarLogSessionSummary,
@@ -22,6 +23,10 @@ from backend.models import (
 )
 
 router = APIRouter()
+
+
+def _row_get(row: sqlite3.Row, key: str, default=None):
+    return row[key] if key in row.keys() else default
 
 
 def _row_to_session_summary(row: sqlite3.Row) -> CarLogSessionSummary:
@@ -43,6 +48,7 @@ def _row_to_session_summary(row: sqlite3.Row) -> CarLogSessionSummary:
         wifi_seen=bool(row["wifi_seen"]) if row["wifi_seen"] is not None else None,
         gps_seen=bool(row["gps_seen"]) if row["gps_seen"] is not None else None,
         gps_fix_seen=bool(row["gps_fix_seen"]) if row["gps_fix_seen"] is not None else None,
+        total_distance_km=_row_get(row, "total_distance_km"),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -57,6 +63,41 @@ def _row_to_field_stats(row: sqlite3.Row) -> CarLogFieldStats:
         last_value=row["last_value"],
         sample_count=row["sample_count"],
     )
+
+
+def _session_file_path(session_id: str) -> Path:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute(
+            "SELECT relative_path FROM car_log_sessions WHERE session_id = ?",
+            (session_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Session not found")
+    finally:
+        conn.close()
+
+    repo_root = Path(REPOSITORY_DIR).resolve()
+    full_path = (Path(REPOSITORY_DIR) / row["relative_path"]).resolve()
+    try:
+        if not full_path.is_relative_to(repo_root):
+            raise HTTPException(status_code=404, detail="Invalid path")
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Invalid path")
+    if not full_path.exists():
+        raise HTTPException(status_code=404, detail="Raw file not found on disk")
+    if not full_path.is_file():
+        raise HTTPException(status_code=400, detail="Session path is not a file")
+    return full_path
+
+
+def _csv_cell(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
 @router.get("/car-logs/stats", response_model=CarLogStats)
@@ -100,42 +141,48 @@ async def list_sessions(
         params = []
 
         if device:
-            conditions.append("device_name = ?")
-            params.append(device)
+            conditions.append("LOWER(s.device_name) LIKE LOWER(?)")
+            params.append(f"%{device}%")
 
         if vin:
-            conditions.append("vin = ?")
-            params.append(vin)
+            conditions.append("LOWER(s.vin) LIKE LOWER(?)")
+            params.append(f"%{vin}%")
 
         if date_from:
-            conditions.append("started_at >= ?")
-            params.append(date_from)
+            conditions.append("s.started_at >= ?")
+            params.append(date_from if "T" in date_from else f"{date_from}T00:00:00")
 
         if date_to:
-            conditions.append("started_at <= ?")
-            params.append(date_to)
+            conditions.append("s.started_at <= ?")
+            params.append(date_to if "T" in date_to else f"{date_to}T23:59:59")
 
         if has_gps is not None:
-            conditions.append("gps_seen = ?")
+            conditions.append("s.gps_seen = ?")
             params.append(1 if has_gps else 0)
 
         if has_wifi is not None:
-            conditions.append("wifi_seen = ?")
+            conditions.append("s.wifi_seen = ?")
             params.append(1 if has_wifi else 0)
 
         if q:
             pattern = f"%{q}%"
             conditions.append(
-                "(session_id LIKE ? OR device_name LIKE ? OR vin LIKE ? OR vehicle LIKE ?)"
+                "(s.session_id LIKE ? OR s.device_name LIKE ? OR s.vin LIKE ? OR s.vehicle LIKE ?)"
             )
             params.extend([pattern, pattern, pattern, pattern])
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         cur = conn.execute(
             f"""
-            SELECT * FROM car_log_sessions
+            SELECT
+                s.*,
+                COALESCE(distance.last_value, distance.max_value) AS total_distance_km
+            FROM car_log_sessions s
+            LEFT JOIN car_log_session_fields distance
+                ON distance.session_id = s.session_id
+                AND distance.field_path = 'inferred.trip_distance_km'
             {where}
-            ORDER BY started_at DESC
+            ORDER BY s.started_at DESC
             LIMIT ? OFFSET ?
             """,
             (*params, limit, skip),
@@ -170,6 +217,40 @@ async def get_session(session_id: str):
         fields = [_row_to_field_stats(r) for r in field_rows]
 
         return CarLogSessionDetail(**summary.model_dump(), fields=fields)
+    finally:
+        conn.close()
+
+
+@router.delete("/car-logs/sessions/{session_id}", status_code=204)
+async def delete_session(session_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute(
+            "SELECT relative_path FROM car_log_sessions WHERE session_id = ?",
+            (session_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        repo_root = Path(REPOSITORY_DIR).resolve()
+        full_path = (Path(REPOSITORY_DIR) / row["relative_path"]).resolve()
+        try:
+            if not full_path.is_relative_to(repo_root):
+                raise HTTPException(status_code=404, detail="Invalid path")
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Invalid path")
+
+        if full_path.exists():
+            if not full_path.is_file():
+                raise HTTPException(status_code=400, detail="Session path is not a file")
+            full_path.unlink()
+
+        conn.execute("DELETE FROM car_log_sessions WHERE session_id = ?", (session_id,))
+        conn.commit()
+        return None
     finally:
         conn.close()
 
@@ -268,8 +349,7 @@ async def get_session_series(
     if not requested_fields:
         raise HTTPException(status_code=400, detail="At least one field is required")
 
-    samples: list[tuple[float, dict[str, float | None]]] = []
-    ref_time: float | None = None
+    raw_samples: list[dict] = []
 
     with open(full_path, "r", encoding="utf-8") as fh:
         for line in fh:
@@ -304,18 +384,9 @@ async def get_session_series(
             if ts_str is None:
                 continue
 
-            try:
-                dt = datetime.fromisoformat(str(ts_str))
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                ts = dt.timestamp()
-            except (ValueError, TypeError):
+            ts = _parse_timestamp(ts_str)
+            if ts is None:
                 continue
-
-            if time_axis == "relative_s":
-                if ref_time is None:
-                    ref_time = ts
-                ts = ts - ref_time
 
             field_vals: dict[str, float | None] = {}
             for field in requested_fields:
@@ -329,7 +400,33 @@ async def get_session_series(
                         val = None
                 field_vals[field] = val
 
-            samples.append((ts, field_vals))
+            raw_samples.append({
+                "timestamp": ts_str,
+                "raw_ts": ts,
+                "field_vals": field_vals,
+                "wifi_connected": (
+                    flat.get("wifi.connected")
+                    or flat.get("time_context.wifi_connected")
+                ),
+                "gps_has_fix": (
+                    flat.get("time_context.gps_has_fix")
+                    or flat.get("gps.fix")
+                ),
+                "clock_confidence": flat.get("time_context.clock_confidence"),
+            })
+
+    corrected_times = _correct_clock_timeline(raw_samples)
+    samples: list[tuple[float, dict[str, float | None]]] = []
+    ref_time: float | None = None
+    for i, sample in enumerate(raw_samples):
+        ts = corrected_times[i] if i < len(corrected_times) else sample["raw_ts"]
+        if ts is None:
+            continue
+        if time_axis == "relative_s":
+            if ref_time is None:
+                ref_time = ts
+            ts = ts - ref_time
+        samples.append((ts, sample["field_vals"]))
 
     n = len(samples)
     if n == 0:
@@ -453,32 +550,61 @@ async def get_session_preview(
 
 @router.get("/car-logs/sessions/{session_id}/raw")
 async def download_session_raw(session_id: str):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.row_factory = sqlite3.Row
-    try:
-        cur = conn.execute(
-            "SELECT relative_path FROM car_log_sessions WHERE session_id = ?",
-            (session_id,),
-        )
-        row = cur.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Session not found")
-    finally:
-        conn.close()
-
-    full_path = Path(REPOSITORY_DIR) / row["relative_path"]
-    try:
-        if not full_path.resolve().is_relative_to(Path(REPOSITORY_DIR).resolve()):
-            raise HTTPException(status_code=404, detail="Invalid path")
-    except ValueError:
-        raise HTTPException(status_code=404, detail="Invalid path")
-    if not full_path.exists():
-        raise HTTPException(status_code=404, detail="Raw file not found on disk")
+    full_path = _session_file_path(session_id)
 
     filename = f"{session_id}.jsonl"
     return FileResponse(
         path=str(full_path),
         media_type="application/x-jsonlines",
         filename=filename,
+    )
+
+
+@router.get("/car-logs/sessions/{session_id}/csv")
+async def download_session_csv(session_id: str):
+    full_path = _session_file_path(session_id)
+
+    rows: list[dict] = []
+    fieldnames: list[str] = []
+    seen_fields: set[str] = set()
+
+    with open(full_path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                obj = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+
+            flat = {key: _csv_cell(value) for key, value in _flatten(obj).items()}
+            for key in flat.keys():
+                if key not in seen_fields:
+                    seen_fields.add(key)
+                    fieldnames.append(key)
+            rows.append(flat)
+
+    preferred_first = [
+        "logged_at",
+        "time_context.logged_at",
+        "time_context.sample_time",
+        "session_id",
+        "device_name",
+        "vehicle",
+        "vin",
+    ]
+    ordered_fields = [f for f in preferred_first if f in seen_fields]
+    ordered_fields.extend(f for f in fieldnames if f not in ordered_fields)
+
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=ordered_fields, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+
+    filename = f"{session_id}.csv"
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

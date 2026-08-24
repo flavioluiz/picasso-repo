@@ -3,11 +3,12 @@ import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, List, Tuple
 
 from backend.config import REPOSITORY_DIR, CAR_DATALOG_SUBDIR
 
 logger = logging.getLogger(__name__)
+CAR_LOG_PARSER_VERSION = 2
 
 
 def _flatten(obj: Any, prefix: str = "") -> Dict[str, Any]:
@@ -23,6 +24,110 @@ def _flatten(obj: Any, prefix: str = "") -> Dict[str, Any]:
 
 def _is_numeric(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _parse_timestamp(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value))
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _iso_from_timestamp(ts: float | None) -> str | None:
+    if ts is None:
+        return None
+    return datetime.fromtimestamp(ts, timezone.utc).isoformat()
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    sorted_values = sorted(values)
+    mid = len(sorted_values) // 2
+    if len(sorted_values) % 2:
+        return sorted_values[mid]
+    return (sorted_values[mid - 1] + sorted_values[mid]) / 2
+
+
+def _correct_clock_timeline(samples: list[dict[str, Any]]) -> list[float | None]:
+    """Return display timestamps with clock jumps removed.
+
+    Raspberry Pis without RTC may log an offline clock first and later jump when
+    network time arrives. The first large forward jump is treated as the trusted
+    anchor, while previous samples are shifted to preserve acquisition elapsed
+    time.
+    """
+    raw_times = [_parse_timestamp(s.get("timestamp")) for s in samples]
+    if not raw_times:
+        return []
+
+    positive_deltas = [
+        raw_times[i] - raw_times[i - 1]
+        for i in range(1, len(raw_times))
+        if raw_times[i] is not None
+        and raw_times[i - 1] is not None
+        and 0 < raw_times[i] - raw_times[i - 1] <= 30
+    ]
+    nominal_delta = _median(positive_deltas) or 1.0
+    jump_threshold = max(300.0, nominal_delta * 10.0)
+
+    elapsed: list[float | None] = []
+    current_elapsed = 0.0
+    prev_raw: float | None = None
+    for raw_ts in raw_times:
+        if prev_raw is None or raw_ts is None:
+            elapsed.append(current_elapsed)
+            prev_raw = raw_ts
+            continue
+
+        delta = raw_ts - prev_raw
+        if 0 <= delta <= jump_threshold:
+            current_elapsed += delta
+        else:
+            current_elapsed += nominal_delta
+        elapsed.append(current_elapsed)
+        prev_raw = raw_ts
+
+    anchor_idx = None
+    for i in range(1, len(raw_times)):
+        if raw_times[i] is None or raw_times[i - 1] is None:
+            continue
+        if raw_times[i] - raw_times[i - 1] > jump_threshold:
+            anchor_idx = i
+            break
+
+    if anchor_idx is None:
+        for i, sample in enumerate(samples):
+            confidence = sample.get("clock_confidence")
+            if (
+                raw_times[i] is not None
+                and (
+                    sample.get("wifi_connected")
+                    or sample.get("gps_has_fix")
+                    or (confidence and confidence != "offline_unverified")
+                )
+            ):
+                anchor_idx = i
+                break
+
+    if anchor_idx is None:
+        anchor_idx = next((i for i, ts in enumerate(raw_times) if ts is not None), None)
+    if anchor_idx is None or raw_times[anchor_idx] is None:
+        return raw_times
+
+    anchor_ts = raw_times[anchor_idx]
+    anchor_elapsed = elapsed[anchor_idx] or 0.0
+    return [
+        anchor_ts + ((sample_elapsed or 0.0) - anchor_elapsed)
+        if raw_times[i] is not None
+        else None
+        for i, sample_elapsed in enumerate(elapsed)
+    ]
 
 
 def _parse_jsonl_file(file_path: Path, repo_dir: Path) -> Tuple[dict, list[dict]]:
@@ -47,6 +152,7 @@ def _parse_jsonl_file(file_path: Path, repo_dir: Path) -> Tuple[dict, list[dict]
     sample_count = 0
     data_vehicle = None
     data_vin = None
+    time_samples: list[dict[str, Any]] = []
 
     with open(file_path, "r", encoding="utf-8") as f:
         for i, line in enumerate(f):
@@ -69,6 +175,20 @@ def _parse_jsonl_file(file_path: Path, repo_dir: Path) -> Tuple[dict, list[dict]
 
             logged_at = flat.get("time_context.logged_at") or flat.get("logged_at")
             sample_time = flat.get("time_context.sample_time") or flat.get("sample_time")
+            timeline_time = logged_at or sample_time
+            if timeline_time is not None:
+                time_samples.append({
+                    "timestamp": timeline_time,
+                    "wifi_connected": (
+                        flat.get("wifi.connected")
+                        or flat.get("time_context.wifi_connected")
+                    ),
+                    "gps_has_fix": (
+                        flat.get("time_context.gps_has_fix")
+                        or flat.get("gps.fix")
+                    ),
+                    "clock_confidence": flat.get("time_context.clock_confidence"),
+                })
 
             if logged_at is not None:
                 if first_logged_at is None:
@@ -121,6 +241,12 @@ def _parse_jsonl_file(file_path: Path, repo_dir: Path) -> Tuple[dict, list[dict]
 
     started_at = first_logged_at or first_sample_time
     ended_at = last_logged_at or last_sample_time
+    corrected_times = _correct_clock_timeline(time_samples)
+    corrected_valid_times = [ts for ts in corrected_times if ts is not None]
+    if corrected_valid_times:
+        started_at = _iso_from_timestamp(corrected_valid_times[0])
+        ended_at = _iso_from_timestamp(corrected_valid_times[-1])
+
     duration_s = None
     if started_at and ended_at:
         try:
@@ -151,6 +277,7 @@ def _parse_jsonl_file(file_path: Path, repo_dir: Path) -> Tuple[dict, list[dict]
         "gps_seen": gps_seen,
         "gps_fix_seen": gps_fix_seen,
         "scan_mtime": mtime,
+        "parser_version": CAR_LOG_PARSER_VERSION,
         "created_at": now,
         "updated_at": now,
     }
@@ -197,13 +324,18 @@ def sync_car_datalog(db: sqlite3.Connection, repo_dir: Path) -> Tuple[int, int]:
             continue
 
         cur = db.execute(
-            "SELECT file_size, scan_mtime FROM car_log_sessions "
+            "SELECT file_size, scan_mtime, parser_version FROM car_log_sessions "
             "WHERE session_id = ?",
             (session_id,),
         )
         row = cur.fetchone()
 
-        if row is not None and row[0] == stat.st_size and row[1] == stat.st_mtime:
+        if (
+            row is not None
+            and row[0] == stat.st_size
+            and row[1] == stat.st_mtime
+            and row[2] == CAR_LOG_PARSER_VERSION
+        ):
             continue
 
         try:
@@ -219,8 +351,8 @@ def sync_car_datalog(db: sqlite3.Connection, repo_dir: Path) -> Tuple[int, int]:
                     file_size, sample_count, started_at, ended_at, duration_s,
                     first_logged_at, last_logged_at, first_sample_time,
                     last_sample_time, wifi_seen, gps_seen, gps_fix_seen,
-                    created_at, updated_at, scan_mtime
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    created_at, updated_at, scan_mtime, parser_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session["session_id"],
                     session["device_name"],
@@ -242,6 +374,7 @@ def sync_car_datalog(db: sqlite3.Connection, repo_dir: Path) -> Tuple[int, int]:
                     session["created_at"],
                     session["updated_at"],
                     session["scan_mtime"],
+                    session["parser_version"],
                 ),
             )
             synced += 1
@@ -253,7 +386,7 @@ def sync_car_datalog(db: sqlite3.Connection, repo_dir: Path) -> Tuple[int, int]:
                     duration_s=?, first_logged_at=?, last_logged_at=?,
                     first_sample_time=?, last_sample_time=?,
                     wifi_seen=?, gps_seen=?, gps_fix_seen=?,
-                    updated_at=?, scan_mtime=?
+                    updated_at=?, scan_mtime=?, parser_version=?
                 WHERE session_id=?""",
                 (
                     session["device_name"],
@@ -274,6 +407,7 @@ def sync_car_datalog(db: sqlite3.Connection, repo_dir: Path) -> Tuple[int, int]:
                     session["gps_fix_seen"],
                     now,
                     session["scan_mtime"],
+                    session["parser_version"],
                     session["session_id"],
                 ),
             )

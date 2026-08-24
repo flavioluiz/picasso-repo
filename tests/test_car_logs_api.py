@@ -113,6 +113,21 @@ def test_list_sessions_filter_by_device():
     assert all(s["device_name"] == "device-a" for s in data)
 
 
+def test_list_sessions_filter_by_device_partial_case_insensitive():
+    repo_dir = Path(REPOSITORY_DIR)
+    d1 = _make_session_dir(repo_dir, device="c3-picasso-2013", vin="V1")
+    d2 = _make_session_dir(repo_dir, device="other-device", vin="V1")
+    _write_jsonl(d1 / "s1.jsonl", [_sample()])
+    _write_jsonl(d2 / "s2.jsonl", [_sample(overrides={"device_name": "other-device"})])
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions", params={"device": "PICASSO"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["device_name"] == "c3-picasso-2013"
+
+
 def test_list_sessions_filter_by_vin():
     repo_dir = Path(REPOSITORY_DIR)
     d = _make_session_dir(repo_dir, device="dev1", vin="VIN123")
@@ -124,6 +139,19 @@ def test_list_sessions_filter_by_vin():
     assert len(resp.json()) >= 1
     resp2 = c.get("/api/car-logs/sessions", params={"vin": "NONEXISTENT"})
     assert len(resp2.json()) == 0
+
+
+def test_list_sessions_filter_by_vin_partial_case_insensitive():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir, device="dev1", vin="VF7ABC123")
+    _write_jsonl(d / "s1.jsonl", [_sample(overrides={"vin": "VF7ABC123"})])
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions", params={"vin": "abc"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["vin"] == "VF7ABC123"
 
 
 def test_list_sessions_filter_by_date_from():
@@ -150,6 +178,17 @@ def test_list_sessions_filter_by_date_to():
     assert len(resp.json()) >= 1
     resp2 = c.get("/api/car-logs/sessions", params={"date_to": "2020-01-01"})
     assert len(resp2.json()) == 0
+
+
+def test_list_sessions_filter_by_date_to_includes_whole_day():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", [_sample()])
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions", params={"date_to": "2026-05-07"})
+    assert resp.status_code == 200
+    assert len(resp.json()) == 1
 
 
 def test_list_sessions_filter_by_has_gps():
@@ -250,6 +289,58 @@ def test_get_session_detail_not_found():
     assert resp.status_code == 404
 
 
+def test_delete_session_removes_file_and_database_record():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    f = d / "s1.jsonl"
+    _write_jsonl(f, [_sample()])
+    c = _client()
+    _sync(c)
+
+    resp = c.delete("/api/car-logs/sessions/s1")
+    assert resp.status_code == 204
+    assert not f.exists()
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM car_log_sessions WHERE session_id = ?",
+            ("s1",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is None
+
+
+def test_delete_session_not_found():
+    c = _client()
+    _sync(c)
+    resp = c.delete("/api/car-logs/sessions/nonexistent")
+    assert resp.status_code == 404
+
+
+def test_delete_session_rejects_path_traversal_without_removing_external_file():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", [_sample()])
+    external_file = repo_dir.parent / "outside.jsonl"
+    external_file.write_text("preserve me", encoding="utf-8")
+    c = _client()
+    _sync(c)
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE car_log_sessions SET relative_path = ? WHERE session_id = ?",
+        (str(external_file), "s1"),
+    )
+    conn.commit()
+    conn.close()
+
+    resp = c.delete("/api/car-logs/sessions/s1")
+    assert resp.status_code == 404
+    assert external_file.read_text(encoding="utf-8") == "preserve me"
+
+
 def test_download_raw_returns_jsonl():
     repo_dir = Path(REPOSITORY_DIR)
     d = _make_session_dir(repo_dir)
@@ -298,6 +389,81 @@ def test_download_raw_rejects_path_traversal():
     conn.commit()
     conn.close()
     resp = c.get("/api/car-logs/sessions/s1/raw")
+    assert resp.status_code == 404
+
+
+def test_download_csv_returns_flattened_csv():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", [
+        _sample(overrides={"direct": {"rpm": 1200.5, "speed_kmh": 12}}),
+        _sample(overrides={"direct": {"rpm": 1800.0, "speed_kmh": 34}}),
+    ])
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/csv")
+    assert resp.status_code == 200
+    assert "text/csv" in resp.headers.get("content-type", "")
+    assert resp.headers.get("content-disposition", "").endswith('s1.csv"')
+
+    lines = resp.text.splitlines()
+    assert len(lines) == 3
+    header = lines[0].split(",")
+    assert "session_id" in header
+    assert "direct.rpm" in header
+    assert "direct.speed_kmh" in header
+    assert "time_context.sample_time" in header
+    assert "1200.5" in resp.text
+    assert "1800.0" in resp.text
+
+
+def test_download_csv_skips_invalid_json_lines():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    f = d / "s1.jsonl"
+    _write_jsonl(f, [_sample()])
+    with open(f, "a") as fh:
+        fh.write("{bad json\n")
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/s1/csv")
+    assert resp.status_code == 200
+    assert len(resp.text.splitlines()) == 2
+
+
+def test_download_csv_not_found():
+    c = _client()
+    _sync(c)
+    resp = c.get("/api/car-logs/sessions/nonexistent/csv")
+    assert resp.status_code == 404
+
+
+def test_download_csv_file_missing_on_disk():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    f = d / "s1.jsonl"
+    _write_jsonl(f, [_sample()])
+    c = _client()
+    _sync(c)
+    f.unlink()
+    resp = c.get("/api/car-logs/sessions/s1/csv")
+    assert resp.status_code == 404
+
+
+def test_download_csv_rejects_path_traversal():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", [_sample()])
+    c = _client()
+    _sync(c)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE car_log_sessions SET relative_path = ? WHERE session_id = ?",
+        ("../../etc/passwd", "s1"),
+    )
+    conn.commit()
+    conn.close()
+    resp = c.get("/api/car-logs/sessions/s1/csv")
     assert resp.status_code == 404
 
 
@@ -426,6 +592,83 @@ def test_series_relative_s_intervals():
     assert len(points) == 5
     assert abs(points[1][0] - 2.0) < 0.01
     assert abs(points[2][0] - 4.0) < 0.01
+
+
+def test_series_relative_s_ignores_clock_jump_after_wifi():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    samples = []
+    for i, (ts, wifi, confidence) in enumerate([
+        ("2026-05-07T10:00:00.000000+00:00", False, "offline_unverified"),
+        ("2026-05-07T10:00:02.000000+00:00", False, "offline_unverified"),
+        ("2026-05-07T12:00:04.000000+00:00", True, "network_likely"),
+        ("2026-05-07T12:00:06.000000+00:00", True, "network_likely"),
+    ]):
+        samples.append(_sample(overrides={
+            "logged_at": ts,
+            "time_context": {
+                "sample_time": ts,
+                "logged_at": ts,
+                "wifi_connected": wifi,
+                "gps_connected": False,
+                "gps_has_fix": False,
+                "clock_confidence": confidence,
+            },
+            "wifi": {"connected": wifi},
+            "direct": {
+                "rpm": 1000.0 + i,
+                "speed_kmh": i,
+                "coolant_temp_c": 70 + i,
+            },
+        }))
+    _write_jsonl(d / "s1.jsonl", samples)
+    c = _client()
+    _sync(c)
+    resp = c.get(
+        "/api/car-logs/sessions/s1/series",
+        params={"fields": "direct.rpm", "time_axis": "relative_s"},
+    )
+    assert resp.status_code == 200
+    points = resp.json()["series"][0]["points"]
+    assert [p[0] for p in points] == [0.0, 2.0, 4.0, 6.0]
+
+
+def test_series_sample_time_anchors_to_true_network_time_after_jump():
+    repo_dir = Path(REPOSITORY_DIR)
+    d = _make_session_dir(repo_dir)
+    samples = []
+    for i, (ts, wifi, confidence) in enumerate([
+        ("2026-05-07T10:00:00.000000+00:00", False, "offline_unverified"),
+        ("2026-05-07T10:00:02.000000+00:00", False, "offline_unverified"),
+        ("2026-05-07T12:00:04.000000+00:00", True, "network_likely"),
+    ]):
+        samples.append(_sample(overrides={
+            "logged_at": ts,
+            "time_context": {
+                "sample_time": ts,
+                "logged_at": ts,
+                "wifi_connected": wifi,
+                "gps_connected": False,
+                "gps_has_fix": False,
+                "clock_confidence": confidence,
+            },
+            "wifi": {"connected": wifi},
+            "direct": {
+                "rpm": 1000.0 + i,
+                "speed_kmh": i,
+                "coolant_temp_c": 70 + i,
+            },
+        }))
+    _write_jsonl(d / "s1.jsonl", samples)
+    c = _client()
+    _sync(c)
+    resp = c.get(
+        "/api/car-logs/sessions/s1/series",
+        params={"fields": "direct.rpm", "time_axis": "sample_time"},
+    )
+    assert resp.status_code == 200
+    points = resp.json()["series"][0]["points"]
+    assert points[0][0] == points[2][0] - 4.0
 
 
 def test_series_sample_time_is_unix_timestamp():

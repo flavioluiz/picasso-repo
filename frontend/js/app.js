@@ -1130,6 +1130,8 @@
   let _carLogFilterDateTo = '';
   let _carLogFilterHasGps = false;
   let _carLogFilterHasWifi = false;
+  let _carLogSelectedSessionIds = new Set();
+  let _carLogVisibleSessionIds = [];
 
   const CAR_LOG_PRESETS = {
     'Motor': ['direct.rpm', 'direct.engine_load_pct', 'direct.throttle_pct', 'direct.timing_advance_deg'],
@@ -1147,14 +1149,41 @@
     'direct.engine_load_pct': 'Engine Load (%)',
     'direct.throttle_pct': 'Throttle (%)',
     'direct.timing_advance_deg': 'Timing Advance (\u00b0)',
+    'direct.map_kpa': 'MAP (kPa)',
+    'direct.adapter_voltage_v': 'Battery (V)',
     'direct.short_fuel_trim_b1_pct': 'Short Fuel Trim B1 (%)',
     'direct.long_fuel_trim_b1_pct': 'Long Fuel Trim B1 (%)',
     'direct.o2_b1s1_voltage_v': 'O2 B1S1 (V)',
     'direct.o2_b1s2_voltage_v': 'O2 B1S2 (V)',
     'inferred.instant_km_l': 'Instant Consumption (km/L)',
+    'inferred.fuel_rate_l_h_gasoline_e27': 'Fuel Rate Gasoline E27 (L/h)',
+    'inferred.fuel_rate_l_h_ethanol': 'Fuel Rate Ethanol (L/h)',
     'inferred.selected_fuel_rate_l_h': 'Fuel Rate (L/h)',
+    'inferred.trip_distance_km': 'Trip Distance (km)',
     'inferred.trip_average_km_l': 'Trip Average (km/L)',
     'gps.speed': 'GPS Speed (km/h)',
+  };
+
+  const CAR_LOG_FIELD_ALIASES = {
+    'metrics.RPM': 'direct.rpm',
+    'metrics.SPEED': 'direct.speed_kmh',
+    'metrics.COOLANT_TEMP': 'direct.coolant_temp_c',
+    'metrics.INTAKE_TEMP': 'direct.intake_temp_c',
+    'metrics.INTAKE_PRESSURE': 'direct.map_kpa',
+    'metrics.ENGINE_LOAD': 'direct.engine_load_pct',
+    'metrics.THROTTLE_POS': 'direct.throttle_pct',
+    'metrics.TIMING_ADVANCE': 'direct.timing_advance_deg',
+    'metrics.SHORT_FUEL_TRIM_1': 'direct.short_fuel_trim_b1_pct',
+    'metrics.LONG_FUEL_TRIM_1': 'direct.long_fuel_trim_b1_pct',
+    'metrics.O2_B1S1_VOLTAGE': 'direct.o2_b1s1_voltage_v',
+    'metrics.O2_B1S1_TRIM': 'direct.o2_b1s1_stft_pct',
+    'metrics.O2_B1S2_VOLTAGE': 'direct.o2_b1s2_voltage_v',
+    'metrics.ELM_VOLTAGE': 'direct.adapter_voltage_v',
+    'metrics.FUEL_RATE_GASOLINE_E27': 'inferred.fuel_rate_l_h_gasoline_e27',
+    'metrics.FUEL_RATE_ETHANOL': 'inferred.fuel_rate_l_h_ethanol',
+    'metrics.INSTANT_KM_L': 'inferred.instant_km_l',
+    'metrics.TRIP_DISTANCE_KM': 'inferred.trip_distance_km',
+    'metrics.TRIP_AVERAGE_KM_L': 'inferred.trip_average_km_l',
   };
 
   const CAR_LOG_FIELD_COLORS = {
@@ -1162,6 +1191,8 @@
     'direct.engine_load_pct': '#6366f1',
     'direct.throttle_pct': '#ec4899',
     'direct.timing_advance_deg': '#14b8a6',
+    'direct.map_kpa': '#84cc16',
+    'direct.adapter_voltage_v': '#f97316',
     'direct.short_fuel_trim_b1_pct': '#f59e0b',
     'direct.long_fuel_trim_b1_pct': '#6366f1',
     'direct.o2_b1s1_voltage_v': '#ef4444',
@@ -1169,7 +1200,10 @@
     'direct.coolant_temp_c': '#ef4444',
     'direct.intake_temp_c': '#3b82f6',
     'inferred.instant_km_l': '#8b5cf6',
+    'inferred.fuel_rate_l_h_gasoline_e27': '#f59e0b',
+    'inferred.fuel_rate_l_h_ethanol': '#ec4899',
     'inferred.selected_fuel_rate_l_h': '#f59e0b',
+    'inferred.trip_distance_km': '#3b82f6',
     'inferred.trip_average_km_l': '#10b981',
     'direct.speed_kmh': '#3b82f6',
     'gps.speed': '#14b8a6',
@@ -1188,6 +1222,60 @@
   let _chartTimeAxis = 'relative_s';
   let _currentSessionId = null;
   let _currentSessionFields = [];
+
+  function _carLogFieldLabel(fieldPath) {
+    if (CAR_LOG_FIELD_LABELS[fieldPath]) return CAR_LOG_FIELD_LABELS[fieldPath];
+    return fieldPath.split('.').pop().replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  }
+
+  function _carLogFieldUnit(fieldPath) {
+    const label = CAR_LOG_FIELD_LABELS[fieldPath] || '';
+    const labelMatch = label.match(/\(([^)]+)\)$/);
+    if (labelMatch) return labelMatch[1];
+    if (/_km_l$/i.test(fieldPath)) return 'km/L';
+    if (/_kmh$/i.test(fieldPath) || /speed/i.test(fieldPath)) return 'km/h';
+    if (/_l_h$/i.test(fieldPath)) return 'L/h';
+    if (/_temp_c$/i.test(fieldPath) || /_c$/i.test(fieldPath)) return '\u00b0C';
+    if (/_voltage_v$/i.test(fieldPath) || /_v$/i.test(fieldPath)) return 'V';
+    if (/_pct$/i.test(fieldPath)) return '%';
+    if (/_deg$/i.test(fieldPath)) return '\u00b0';
+    if (/_kpa$/i.test(fieldPath)) return 'kPa';
+    if (/_m$/i.test(fieldPath)) return 'm';
+    return '';
+  }
+
+  function _carLogSelectableFields(fields) {
+    if (!Array.isArray(fields)) return [];
+    const paths = new Set(fields.map(f => f.field_path));
+    const hiddenPrefixes = ['connection.', 'metadata.', 'time_context.', 'wifi.'];
+    return fields.filter(f => {
+      const path = f.field_path || '';
+      if (CAR_LOG_FIELD_ALIASES[path] && paths.has(CAR_LOG_FIELD_ALIASES[path])) return false;
+      if (hiddenPrefixes.some(prefix => path.startsWith(prefix))) return false;
+      return f.min_value != null || f.max_value != null || f.avg_value != null || f.last_value != null;
+    });
+  }
+
+  function _formatCarNumber(value, decimals = 1) {
+    if (value == null || !Number.isFinite(Number(value))) return '--';
+    return Number(value).toLocaleString('pt-BR', {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    });
+  }
+
+  function _carLogDistanceTotal(fields) {
+    const field = Array.isArray(fields) ? fields.find(f => f.field_path === 'inferred.trip_distance_km') : null;
+    if (!field) return null;
+    if (field.last_value != null) return field.last_value;
+    if (field.max_value != null) return field.max_value;
+    return null;
+  }
+
+  function _deleteCarLogSession(sessionId) {
+    if (carLogApi.deleteSession) return carLogApi.deleteSession(sessionId);
+    return api.del(`/api/car-logs/sessions/${encodeURIComponent(sessionId)}`);
+  }
 
   function formatCarDuration(seconds) {
     if (seconds == null) return '--';
@@ -1223,6 +1311,12 @@
         <label class="carlog-check"><input type="checkbox" id="carLogHasGps" ${_carLogFilterHasGps ? 'checked' : ''} style="accent-color:var(--accent);"> GPS</label>
         <label class="carlog-check"><input type="checkbox" id="carLogHasWifi" ${_carLogFilterHasWifi ? 'checked' : ''} style="accent-color:var(--accent);"> Wi-Fi</label>
         <button class="btn btn-primary" id="carLogFilterBtn" style="padding:8px 14px;font-size:0.88rem;">Filtrar</button>
+        <button class="btn" id="carLogClearFilterBtn" style="padding:8px 14px;font-size:0.88rem;background:var(--surface);border:1px solid var(--border);">Limpar</button>
+      </div>
+      <div class="carlog-bulkbar" id="carLogBulkbar">
+        <label class="carlog-select-all"><input type="checkbox" id="carLogSelectAll" style="accent-color:var(--accent);"> Selecionar visíveis</label>
+        <span id="carLogSelectionCount">0 selecionadas</span>
+        <button class="btn carlog-bulk-delete" id="carLogBulkDelete" disabled>Remover selecionadas</button>
       </div>
     `;
   }
@@ -1230,24 +1324,35 @@
   function renderCarLogSessionRow(s) {
     const gpsIcon = s.gps_seen ? '<span class="carlog-badge carlog-gps" title="GPS disponível">&#127757;</span>' : '';
     const wifiIcon = s.wifi_seen ? '<span class="carlog-badge carlog-wifi" title="Wi-Fi visto">&#128246;</span>' : '';
+    const distanceText = s.total_distance_km != null ? _formatCarNumber(s.total_distance_km, 2) + ' km' : '--';
+    const title = s.vehicle || s.device_name || s.session_id;
+    const vinText = s.vin && s.vin !== s.device_name ? s.vin : '';
+    const subtitle = vinText || s.device_name || '';
     return `
       <div class="card carlog-session-card" data-session-id="${esc(s.session_id)}">
-        <div style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr) auto auto;gap:14px;align-items:center;">
-          <div style="min-width:0;">
-            <div style="font-weight:700;font-size:0.95rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(s.device_name)}</div>
-            <div style="font-size:0.82rem;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(s.vin || 'VIN não informado')}</div>
+        <div class="carlog-session-row">
+          <label class="carlog-session-select" title="Selecionar sessão">
+            <input type="checkbox" class="carlog-session-checkbox" data-sid="${esc(s.session_id)}" ${_carLogSelectedSessionIds.has(s.session_id) ? 'checked' : ''} style="accent-color:var(--accent);">
+          </label>
+          <div class="carlog-session-main">
+            <div class="carlog-session-row-title">${esc(title)}</div>
+            ${subtitle && subtitle !== title ? `<div class="carlog-session-row-subtitle">${esc(subtitle)}</div>` : ''}
+            <div class="carlog-session-row-date">${formatCarTimestamp(s.started_at)}</div>
           </div>
-          <div style="min-width:0;">
-            <div style="font-size:0.88rem;">${formatCarTimestamp(s.started_at)}</div>
-            <div style="font-size:0.8rem;color:var(--text-secondary);">Duração: ${formatCarDuration(s.duration_s)}</div>
+          <div class="carlog-session-metrics">
+            <span><strong>${esc(distanceText)}</strong> distância</span>
+            <span>${formatCarDuration(s.duration_s)}</span>
+            <span>${s.sample_count} amostras</span>
+            <span>${formatBytes(s.file_size)}</span>
           </div>
-          <div style="text-align:right;min-width:0;">
-            <div style="font-size:0.85rem;">${formatBytes(s.file_size)} &middot; ${s.sample_count} amostras</div>
-            <div style="margin-top:4px;">${gpsIcon}${wifiIcon}</div>
+          <div class="carlog-session-status">
+            ${gpsIcon}${wifiIcon}
           </div>
-          <div class="actions">
+          <div class="actions carlog-session-actions">
             <button class="btn-icon carlog-open" data-sid="${esc(s.session_id)}" title="Abrir sessão">&#128065;</button>
             <a class="btn-icon carlog-download" href="${carLogApi.rawUrl(s.session_id)}" title="Baixar JSONL" download>&#11015;</a>
+            <a class="btn-icon carlog-download" href="${carLogApi.csvUrl(s.session_id)}" title="Exportar CSV" download>CSV</a>
+            <button class="btn-icon carlog-delete" data-sid="${esc(s.session_id)}" title="Remover sessão">&#128465;</button>
           </div>
         </div>
       </div>
@@ -1262,17 +1367,39 @@
     const hasGps = document.getElementById('carLogHasGps');
     const hasWifi = document.getElementById('carLogHasWifi');
     const filterBtn = document.getElementById('carLogFilterBtn');
-    if (filterBtn) {
-      filterBtn.addEventListener('click', () => {
-        _carLogFilterDevice = deviceInput?.value || '';
-        _carLogFilterVin = vinInput?.value || '';
-        _carLogFilterDateFrom = dateFrom?.value || '';
-        _carLogFilterDateTo = dateTo?.value || '';
-        _carLogFilterHasGps = hasGps?.checked || false;
-        _carLogFilterHasWifi = hasWifi?.checked || false;
-        fetchCarLogSessions();
+    const clearBtn = document.getElementById('carLogClearFilterBtn');
+    const applyFilters = () => {
+      _carLogFilterDevice = (deviceInput?.value || '').trim();
+      _carLogFilterVin = (vinInput?.value || '').trim();
+      _carLogFilterDateFrom = dateFrom?.value || '';
+      _carLogFilterDateTo = dateTo?.value || '';
+      _carLogFilterHasGps = hasGps?.checked || false;
+      _carLogFilterHasWifi = hasWifi?.checked || false;
+      _carLogSelectedSessionIds.clear();
+      fetchCarLogSessions();
+    };
+    if (filterBtn) filterBtn.addEventListener('click', applyFilters);
+    [deviceInput, vinInput].forEach(input => {
+      input?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') applyFilters();
+      });
+    });
+    [dateFrom, dateTo, hasGps, hasWifi].forEach(input => {
+      input?.addEventListener('change', applyFilters);
+    });
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        _carLogFilterDevice = '';
+        _carLogFilterVin = '';
+        _carLogFilterDateFrom = '';
+        _carLogFilterDateTo = '';
+        _carLogFilterHasGps = false;
+        _carLogFilterHasWifi = false;
+        _carLogSelectedSessionIds.clear();
+        loadCarLogs();
       });
     }
+    _bindCarLogBulkActions();
   }
 
   async function fetchCarLogSessions() {
@@ -1287,14 +1414,18 @@
         limit: 200,
       });
       const list = Array.isArray(sessions) ? sessions : [];
+      _carLogVisibleSessionIds = list.map(s => s.session_id);
+      _carLogSelectedSessionIds = new Set([..._carLogSelectedSessionIds].filter(id => _carLogVisibleSessionIds.includes(id)));
       if (!list.length) {
         const listEl = document.getElementById('carLogSessionList');
         if (listEl) listEl.innerHTML = '<p class="placeholder" style="text-align:center;padding:48px 0;">&#128663; Nenhuma sessão de datalog encontrada.</p>';
+        _updateCarLogBulkbar();
         return;
       }
       const listEl = document.getElementById('carLogSessionList');
       if (listEl) listEl.innerHTML = list.map(renderCarLogSessionRow).join('');
       bindCarLogSessionActions();
+      _updateCarLogBulkbar();
     } catch (e) {
       const listEl = document.getElementById('carLogSessionList');
       if (listEl) listEl.innerHTML = `<p class="placeholder">Erro ao carregar sessões: ${esc(e.message)}</p>`;
@@ -1302,10 +1433,37 @@
   }
 
   function bindCarLogSessionActions() {
+    contentEl.querySelectorAll('.carlog-session-checkbox').forEach(input => {
+      input.addEventListener('click', (e) => e.stopPropagation());
+      input.addEventListener('change', () => {
+        const sessionId = input.dataset.sid;
+        if (!sessionId) return;
+        if (input.checked) _carLogSelectedSessionIds.add(sessionId);
+        else _carLogSelectedSessionIds.delete(sessionId);
+        _updateCarLogBulkbar();
+      });
+    });
     contentEl.querySelectorAll('.carlog-open').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         window.location.hash = '#car-logs/' + btn.dataset.sid;
+      });
+    });
+    contentEl.querySelectorAll('.carlog-delete').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const sessionId = btn.dataset.sid;
+        if (!sessionId) return;
+        const confirmed = window.confirm('Remover esta sessão de datalog? O arquivo JSONL também será apagado.');
+        if (!confirmed) return;
+        btn.disabled = true;
+        try {
+          await _deleteCarLogSession(sessionId);
+          await fetchCarLogSessions();
+        } catch (err) {
+          btn.disabled = false;
+          alert('Erro ao remover sessão: ' + err.message);
+        }
       });
     });
     contentEl.querySelectorAll('.carlog-session-card').forEach(card => {
@@ -1317,30 +1475,80 @@
     });
   }
 
+  function _updateCarLogBulkbar() {
+    const countEl = document.getElementById('carLogSelectionCount');
+    const deleteBtn = document.getElementById('carLogBulkDelete');
+    const selectAll = document.getElementById('carLogSelectAll');
+    const selectedVisible = _carLogVisibleSessionIds.filter(id => _carLogSelectedSessionIds.has(id));
+    if (countEl) countEl.textContent = selectedVisible.length + ' selecionada' + (selectedVisible.length === 1 ? '' : 's');
+    if (deleteBtn) deleteBtn.disabled = selectedVisible.length === 0;
+    if (selectAll) {
+      selectAll.checked = _carLogVisibleSessionIds.length > 0 && selectedVisible.length === _carLogVisibleSessionIds.length;
+      selectAll.indeterminate = selectedVisible.length > 0 && selectedVisible.length < _carLogVisibleSessionIds.length;
+    }
+  }
+
+  function _bindCarLogBulkActions() {
+    const selectAll = document.getElementById('carLogSelectAll');
+    const deleteBtn = document.getElementById('carLogBulkDelete');
+    selectAll?.addEventListener('change', () => {
+      if (selectAll.checked) {
+        _carLogVisibleSessionIds.forEach(id => _carLogSelectedSessionIds.add(id));
+      } else {
+        _carLogVisibleSessionIds.forEach(id => _carLogSelectedSessionIds.delete(id));
+      }
+      document.querySelectorAll('.carlog-session-checkbox').forEach(input => {
+        input.checked = selectAll.checked;
+      });
+      _updateCarLogBulkbar();
+    });
+    deleteBtn?.addEventListener('click', async () => {
+      const ids = _carLogVisibleSessionIds.filter(id => _carLogSelectedSessionIds.has(id));
+      if (!ids.length) return;
+      const confirmed = window.confirm(`Remover ${ids.length} sess\u00e3o${ids.length === 1 ? '' : 'es'} de datalog? Os arquivos JSONL tamb\u00e9m ser\u00e3o apagados.`);
+      if (!confirmed) return;
+      deleteBtn.disabled = true;
+      try {
+        for (const id of ids) {
+          await _deleteCarLogSession(id);
+          _carLogSelectedSessionIds.delete(id);
+        }
+        await fetchCarLogSessions();
+      } catch (err) {
+        alert('Erro ao remover sessões: ' + err.message);
+        await fetchCarLogSessions();
+      }
+    });
+  }
+
   function _carLogSummaryFields(fields) {
     if (!Array.isArray(fields)) return [];
     const lookup = {};
     fields.forEach(f => { lookup[f.field_path] = f; });
     const summary = [];
+    const distanceKm = _carLogDistanceTotal(fields);
+    if (distanceKm != null) {
+      summary.push({ label: 'Dist\u00e2ncia', value: _formatCarNumber(distanceKm, 2) + ' km' });
+    }
     const speed = lookup['direct.speed_kmh'];
     if (speed && speed.max_value != null) {
-      summary.push({ label: 'Velocidade m\u00e1x', value: speed.max_value.toFixed(1) + ' km/h', css: 'carlog-stat-speed' });
+      summary.push({ label: 'Velocidade m\u00e1x', value: _formatCarNumber(speed.max_value, 1) + ' km/h' });
     }
     const rpm = lookup['direct.rpm'];
     if (rpm && rpm.max_value != null) {
-      summary.push({ label: 'RPM m\u00e1x', value: rpm.max_value.toFixed(0), css: 'carlog-stat-rpm' });
+      summary.push({ label: 'RPM m\u00e1x', value: _formatCarNumber(rpm.max_value, 0) });
     }
     const coolant = lookup['direct.coolant_temp_c'];
     if (coolant && coolant.max_value != null) {
-      summary.push({ label: 'Coolant m\u00e1x', value: coolant.max_value.toFixed(1) + ' \u00b0C', css: 'carlog-stat-coolant' });
+      summary.push({ label: 'Coolant m\u00e1x', value: _formatCarNumber(coolant.max_value, 1) + ' \u00b0C' });
     }
     const voltageField = fields.find(f => /volt/i.test(f.field_path) && f.min_value != null);
     if (voltageField) {
-      summary.push({ label: 'Tens\u00e3o m\u00edn', value: voltageField.min_value.toFixed(2) + ' V', css: 'carlog-stat-voltage' });
+      summary.push({ label: 'Tens\u00e3o m\u00edn', value: _formatCarNumber(voltageField.min_value, 2) + ' V' });
     }
     const consumption = lookup['inferred.instant_km_l'];
     if (consumption && consumption.avg_value != null) {
-      summary.push({ label: 'Consumo m\u00e9dio', value: consumption.avg_value.toFixed(2) + ' km/l', css: 'carlog-stat-consumption' });
+      summary.push({ label: 'Consumo m\u00e9dio', value: _formatCarNumber(consumption.avg_value, 2) + ' km/l' });
     }
     return summary;
   }
@@ -1359,34 +1567,44 @@
     const gpsFixBadge = session.gps_fix_seen ? '<span class="carlog-badge carlog-gps-fix" title="GPS com fix">&#128205; Fix</span>' : '';
     const wifiBadge = session.wifi_seen ? '<span class="carlog-badge carlog-wifi" title="Wi-Fi visto">&#128246; Wi-Fi</span>' : '';
     const badges = gpsBadge + gpsFixBadge + wifiBadge;
+    const distanceKm = _carLogDistanceTotal(fields);
+    const vinText = session.vin || '';
+    const showVin = vinText && vinText !== session.device_name;
+    const sessionTitle = session.vehicle || session.device_name || session.session_id;
+    const sessionSubtitle = showVin ? 'VIN ' + vinText : (session.vehicle ? session.device_name : '');
 
     let summaryHtml = '';
     if (summaryItems.length) {
       summaryHtml = `
         <div class="carlog-detail-section">
           <h3 class="carlog-detail-heading">Resumo</h3>
-          <div class="carlog-summary-grid">
-            ${summaryItems.map(s => `
-              <div class="card carlog-summary-card ${s.css}">
-                <p class="card-title">${esc(s.label)}</p>
-                <p class="carlog-summary-value">${esc(s.value)}</p>
-              </div>
-            `).join('')}
+          <div class="card carlog-summary-card">
+            <div class="carlog-summary-list">
+              ${summaryItems.map(s => `
+                <div class="carlog-info-item">
+                  <span class="carlog-info-label">${esc(s.label)}</span>
+                  <span class="carlog-info-value">${esc(s.value)}</span>
+                </div>
+              `).join('')}
+            </div>
           </div>
         </div>
       `;
     }
 
-    const availableFieldPaths = fields.map(f => f.field_path);
+    const selectableFields = _carLogSelectableFields(fields);
+    const availableFieldPaths = selectableFields.map(f => f.field_path);
     const presetButtons = Object.keys(CAR_LOG_PRESETS).map(name => {
       const presetFields = CAR_LOG_PRESETS[name].filter(f => availableFieldPaths.includes(f));
       if (presetFields.length === 0) return '';
       return `<button class="carlog-preset-btn" data-preset="${esc(name)}">${esc(name)}</button>`;
     }).join('');
 
-    const fieldChips = fields.map(f => {
-      const label = CAR_LOG_FIELD_LABELS[f.field_path] || f.field_path;
-      return `<span class="carlog-var-chip" data-field="${esc(f.field_path)}" title="${esc(f.field_path)}">${esc(label)}</span>`;
+    const fieldChips = selectableFields.map(f => {
+      const label = _carLogFieldLabel(f.field_path);
+      const unit = _carLogFieldUnit(f.field_path);
+      const unitHtml = unit ? `<span class="carlog-var-unit">${esc(unit)}</span>` : '';
+      return `<span class="carlog-var-chip" data-field="${esc(f.field_path)}" title="${esc(f.field_path)}">${esc(label)}${unitHtml}</span>`;
     }).join('');
 
     let fieldsHtml = '';
@@ -1415,40 +1633,42 @@
         <div class="carlog-detail-badges">
           ${badges}
           <a class="btn btn-primary" href="${carLogApi.rawUrl(session.session_id)}" download style="font-size:0.88rem;padding:6px 14px;">&#11015; Baixar JSONL</a>
+          <a class="btn btn-primary" href="${carLogApi.csvUrl(session.session_id)}" download style="font-size:0.88rem;padding:6px 14px;">Exportar CSV</a>
         </div>
         <div id="carLogWarnings"></div>
       </div>
 
       <div class="carlog-detail-section">
         <h3 class="carlog-detail-heading">Sess\u00e3o</h3>
-        <div class="carlog-meta-grid">
-          <div class="card carlog-meta-card">
-            <p class="card-title">Device</p>
-            <p class="carlog-meta-value">${esc(session.device_name)}</p>
+        <div class="card carlog-meta-card">
+          <div class="carlog-session-summary-head">
+            <div>
+              <p class="carlog-session-title">${esc(sessionTitle)}</p>
+              ${sessionSubtitle ? `<p class="carlog-session-subtitle">${esc(sessionSubtitle)}</p>` : ''}
+            </div>
+            <span class="carlog-session-size">${formatBytes(session.file_size)}</span>
           </div>
-          <div class="card carlog-meta-card">
-            <p class="card-title">VIN</p>
-            <p class="carlog-meta-value">${esc(session.vin || '--')}</p>
-          </div>
-          <div class="card carlog-meta-card">
-            <p class="card-title">In\u00edcio</p>
-            <p class="carlog-meta-value">${formatCarTimestamp(session.started_at)}</p>
-          </div>
-          <div class="card carlog-meta-card">
-            <p class="card-title">Fim</p>
-            <p class="carlog-meta-value">${formatCarTimestamp(session.ended_at)}</p>
-          </div>
-          <div class="card carlog-meta-card">
-            <p class="card-title">Dura\u00e7\u00e3o</p>
-            <p class="carlog-meta-value">${formatCarDuration(session.duration_s)}</p>
-          </div>
-          <div class="card carlog-meta-card">
-            <p class="card-title">Amostras</p>
-            <p class="carlog-meta-value">${session.sample_count}</p>
-          </div>
-          <div class="card carlog-meta-card">
-            <p class="card-title">Tamanho</p>
-            <p class="carlog-meta-value">${formatBytes(session.file_size)}</p>
+          <div class="carlog-info-list">
+            <div class="carlog-info-item">
+              <span class="carlog-info-label">In\u00edcio</span>
+              <span class="carlog-info-value">${formatCarTimestamp(session.started_at)}</span>
+            </div>
+            <div class="carlog-info-item">
+              <span class="carlog-info-label">Fim</span>
+              <span class="carlog-info-value">${formatCarTimestamp(session.ended_at)}</span>
+            </div>
+            <div class="carlog-info-item">
+              <span class="carlog-info-label">Dura\u00e7\u00e3o</span>
+              <span class="carlog-info-value">${formatCarDuration(session.duration_s)}</span>
+            </div>
+            <div class="carlog-info-item">
+              <span class="carlog-info-label">Dist\u00e2ncia</span>
+              <span class="carlog-info-value">${distanceKm != null ? _formatCarNumber(distanceKm, 2) + ' km' : '--'}</span>
+            </div>
+            <div class="carlog-info-item">
+              <span class="carlog-info-label">Amostras</span>
+              <span class="carlog-info-value">${session.sample_count}</span>
+            </div>
           </div>
         </div>
       </div>
@@ -1459,7 +1679,7 @@
         <h3 class="carlog-detail-heading">Gr\u00e1ficos</h3>
         <div class="carlog-presets" id="carlogPresets">${presetButtons}</div>
         <div class="carlog-var-selector">
-          <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:4px;">Selecione vari\u00e1veis:</div>
+          <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:4px;">Selecione vari\u00e1veis (${selectableFields.length} sem duplicatas):</div>
           <div class="carlog-var-chips" id="carlogVarChips">${fieldChips}</div>
         </div>
         <div class="carlog-time-axis-sel">
@@ -1503,7 +1723,11 @@
   function _destroyChart() {
     _chartLoadId++;
     if (_chartInstance) {
-      _chartInstance.destroy();
+      if (Array.isArray(_chartInstance)) {
+        _chartInstance.forEach(chart => chart.destroy());
+      } else {
+        _chartInstance.destroy();
+      }
       _chartInstance = null;
     }
     if (_chartResizeHandler) {
@@ -1548,101 +1772,129 @@
         return;
       }
 
-      const allTimeSet = new Set();
-      data.series.forEach(s => {
-        if (Array.isArray(s.points)) {
-          s.points.forEach(p => allTimeSet.add(p[0]));
-        }
-      });
-      const timeValues = Array.from(allTimeSet).sort((a, b) => a - b);
-      const timeData = timeValues;
-
-      const seriesData = [timeData];
-      const seriesOpts = [{}];
-      const visibleSeries = [];
-
-      data.series.forEach((s, idx) => {
-        const points = Array.isArray(s.points) ? s.points : [];
-        const timeMap = new Map(points.map(p => [p[0], p[1]]));
-        const vals = timeValues.map(t => {
-          const v = timeMap.get(t);
-          return v !== undefined ? v : null;
-        });
-        seriesData.push(vals);
-
-        const label = s.label || s.field;
-        const unit = s.unit ? ` (${s.unit})` : '';
-        visibleSeries.push(label + unit);
-      });
-
-      const theme = _uplotTheme();
-
-      const uplotSeries = [{}, ...data.series.map((s, idx) => {
-        const label = s.label || s.field;
-        const unit = s.unit ? ` (${s.unit})` : '';
-        const color = CAR_LOG_FIELD_COLORS[s.field] || CAR_LOG_CHART_SERIES_COLORS[idx % CAR_LOG_CHART_SERIES_COLORS.length];
-        return {
-          label: label + unit,
-          stroke: color,
-          width: 1.5,
-          spanGaps: true,
-          dash: [0, 0],
-        };
-      })];
-
-      const chartWidth = curContainer.clientWidth || 800;
-      const chartHeight = Math.min(500, Math.max(300, chartWidth * 0.4));
-
-      const opts = {
-        width: chartWidth,
-        height: chartHeight,
-        series: uplotSeries,
-        cursor: {
-          drag: { x: true, y: true },
-        },
-        axes: [
-          {
-            stroke: theme.muted,
-            grid: { stroke: theme.grid },
-            ticks: { stroke: theme.grid },
-            values: (u, vals) => vals.map(v => {
-              if (_chartTimeAxis === 'relative_s') {
-                return v < 60 ? v.toFixed(1) + 's' : (v / 60).toFixed(1) + 'min';
-              }
-              const d = new Date(v * 1000);
-              return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            }),
-          },
-          ...data.series.map(() => ({
-            stroke: theme.muted,
-            grid: { stroke: theme.grid },
-            ticks: { stroke: theme.grid },
-            values: (u, vals) => vals.map(v => v != null ? v.toFixed(1) : '--'),
-            size: 55,
-          })),
-        ],
-        scales: {
-          x: {
-            time: _chartTimeAxis !== 'relative_s',
-          },
-        },
-        padding: [16, 16, 0, 48],
-      };
-
-      if (_chartTimeAxis === 'relative_s') {
-        opts.scales.x.time = false;
+      const plottableSeries = data.series.filter(s => Array.isArray(s.points) && s.points.length > 0);
+      if (plottableSeries.length === 0) {
+        curContainer.innerHTML = '<div class="carlog-chart-empty">Nenhum dado encontrado para as vari\u00e1veis selecionadas.</div>';
+        return;
       }
 
+      const theme = _uplotTheme();
+      const chartWidth = curContainer.clientWidth || 800;
+
       curContainer.innerHTML = '';
-      _chartInstance = new uPlot(opts, seriesData, curContainer);
+      const groups = [];
+      plottableSeries.forEach((s, idx) => {
+        const unit = s.unit || _carLogFieldUnit(s.field) || '';
+        let group = groups.find(g => g.unit === unit);
+        if (!group) {
+          group = { unit, series: [] };
+          groups.push(group);
+        }
+        group.series.push({ ...s, colorIndex: idx });
+      });
+
+      _chartInstance = groups.map((group) => {
+        const allTimeSet = new Set();
+        group.series.forEach(s => {
+          if (Array.isArray(s.points)) {
+            s.points.forEach(p => allTimeSet.add(p[0]));
+          }
+        });
+        const timeValues = Array.from(allTimeSet).sort((a, b) => a - b);
+        const seriesData = [timeValues];
+        group.series.forEach(s => {
+          const points = Array.isArray(s.points) ? s.points : [];
+          const timeMap = new Map(points.map(p => [p[0], p[1]]));
+          seriesData.push(timeValues.map(t => {
+            const v = timeMap.get(t);
+            return v !== undefined ? v : null;
+          }));
+        });
+
+        const panel = document.createElement('div');
+        panel.className = 'carlog-chart-panel';
+        const legendItems = group.series.map(s => {
+          const label = s.label || _carLogFieldLabel(s.field);
+          const color = CAR_LOG_FIELD_COLORS[s.field] || CAR_LOG_CHART_SERIES_COLORS[s.colorIndex % CAR_LOG_CHART_SERIES_COLORS.length];
+          return `<span class="carlog-chart-legend-item"><span class="carlog-chart-swatch" style="background:${esc(color)}"></span>${esc(label)}</span>`;
+        }).join('');
+        const unitLabel = group.unit ? ` (${group.unit})` : '';
+        panel.innerHTML = `
+          <div class="carlog-chart-panel-head">
+            <div class="carlog-chart-title">${esc(group.series.length === 1 ? (group.series[0].label || _carLogFieldLabel(group.series[0].field)) : 'Vari\u00e1veis' + unitLabel)}</div>
+            <div class="carlog-chart-legend">${legendItems}</div>
+          </div>
+          <div class="carlog-chart-canvas"></div>
+        `;
+        curContainer.appendChild(panel);
+
+        const canvasEl = panel.querySelector('.carlog-chart-canvas');
+        const panelWidth = canvasEl.clientWidth || chartWidth;
+        const panelHeight = Math.min(420, Math.max(260, panelWidth * 0.42));
+        const uplotSeries = [{}, ...group.series.map(s => {
+          const label = s.label || _carLogFieldLabel(s.field);
+          const color = CAR_LOG_FIELD_COLORS[s.field] || CAR_LOG_CHART_SERIES_COLORS[s.colorIndex % CAR_LOG_CHART_SERIES_COLORS.length];
+          return {
+            label,
+            stroke: color,
+            width: 1.8,
+            spanGaps: true,
+          };
+        })];
+
+        const opts = {
+          width: panelWidth,
+          height: panelHeight,
+          series: uplotSeries,
+          cursor: {
+            drag: { x: true, y: true },
+          },
+          axes: [
+            {
+              stroke: theme.muted,
+              grid: { stroke: theme.grid },
+              ticks: { stroke: theme.grid },
+              values: (u, vals) => vals.map(v => {
+                if (_chartTimeAxis === 'relative_s') {
+                  return v < 60 ? v.toFixed(1) + 's' : (v / 60).toFixed(1) + 'min';
+                }
+                const d = new Date(v * 1000);
+                return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+              }),
+            },
+            {
+              stroke: theme.muted,
+              grid: { stroke: theme.grid },
+              ticks: { stroke: theme.grid },
+              values: (u, vals) => vals.map(v => v != null ? v.toFixed(1) : '--'),
+              size: chartWidth < 520 ? 42 : 55,
+            },
+          ],
+          scales: {
+            x: {
+              time: _chartTimeAxis !== 'relative_s',
+            },
+          },
+          padding: [12, 12, 0, chartWidth < 520 ? 38 : 48],
+        };
+
+        if (_chartTimeAxis === 'relative_s') {
+          opts.scales.x.time = false;
+        }
+
+        return new uPlot(opts, seriesData, canvasEl);
+      });
 
       _chartResizeHandler = () => {
         if (!_chartInstance) return;
-        const c = document.getElementById('carlogChartContainer');
-        if (!c) return;
-        const w = c.clientWidth || 800;
-        const h = Math.min(500, Math.max(300, w * 0.4));
-        _chartInstance.setSize({ width: w, height: h });
+        const charts = Array.isArray(_chartInstance) ? _chartInstance : [_chartInstance];
+        charts.forEach(chart => {
+          const canvas = chart.root?.parentElement;
+          if (!canvas) return;
+          const w = canvas.clientWidth || 800;
+          const h = Math.min(420, Math.max(260, w * 0.42));
+          chart.setSize({ width: w, height: h });
+        });
       };
       window.addEventListener('resize', _chartResizeHandler);
     } catch (e) {

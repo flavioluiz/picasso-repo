@@ -42,7 +42,7 @@ def test_car_log_sessions_schema():
         "file_size", "sample_count", "started_at", "ended_at", "duration_s",
         "first_logged_at", "last_logged_at", "first_sample_time", "last_sample_time",
         "wifi_seen", "gps_seen", "gps_fix_seen", "created_at", "updated_at",
-        "scan_mtime",
+        "scan_mtime", "parser_version",
     }
     assert set(cols.keys()) == expected_cols
     assert cols["session_id"] == "TEXT"
@@ -52,6 +52,7 @@ def test_car_log_sessions_schema():
     assert cols["sample_count"] == "INTEGER"
     assert cols["duration_s"] == "REAL"
     assert cols["scan_mtime"] == "REAL"
+    assert cols["parser_version"] == "INTEGER"
 
 
 def test_car_log_session_fields_schema():

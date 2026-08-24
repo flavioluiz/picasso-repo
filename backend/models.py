@@ -21,6 +21,7 @@ class CarLogSessionSummary(BaseModel):
     wifi_seen: Optional[bool] = None
     gps_seen: Optional[bool] = None
     gps_fix_seen: Optional[bool] = None
+    total_distance_km: Optional[float] = None
     created_at: str
     updated_at: str
 

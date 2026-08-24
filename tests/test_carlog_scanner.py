@@ -250,6 +250,37 @@ def test_parse_duration(repo_dir):
     assert abs(session["duration_s"] - 120.0) < 1.0
 
 
+def test_parse_corrects_clock_jump_after_network_time(repo_dir):
+    d = _make_session_dir(repo_dir)
+    f = d / "session-2026-05-07T10-00-00Z.jsonl"
+    samples = []
+    for ts, wifi, confidence in [
+        ("2026-05-07T10:00:00.000000+00:00", False, "offline_unverified"),
+        ("2026-05-07T10:00:02.000000+00:00", False, "offline_unverified"),
+        ("2026-05-07T12:00:04.000000+00:00", True, "network_likely"),
+        ("2026-05-07T12:00:06.000000+00:00", True, "network_likely"),
+    ]:
+        samples.append(_sample(overrides={
+            "logged_at": ts,
+            "time_context": {
+                "sample_time": ts,
+                "logged_at": ts,
+                "wifi_connected": wifi,
+                "gps_connected": False,
+                "gps_has_fix": False,
+                "clock_confidence": confidence,
+            },
+            "wifi": {"connected": wifi},
+        }))
+
+    _write_jsonl(f, samples)
+    session, _ = _parse_jsonl_file(f, repo_dir)
+
+    assert session["started_at"].startswith("2026-05-07T12:00:00")
+    assert session["ended_at"].startswith("2026-05-07T12:00:06")
+    assert session["duration_s"] == 6.0
+
+
 def test_parse_truncated_last_line(repo_dir):
     d = _make_session_dir(repo_dir)
     f = d / "session-2026-05-07T10-21-55Z.jsonl"
@@ -363,6 +394,24 @@ def test_sync_skips_unchanged(repo_dir):
         s2, u2 = sync_car_datalog(conn, repo_dir)
         assert s2 == 0
         assert u2 == 0
+    finally:
+        conn.close()
+
+
+def test_sync_reparses_unchanged_file_when_parser_version_changes(repo_dir):
+    d = _make_session_dir(repo_dir)
+    _write_jsonl(d / "s1.jsonl", [_sample()])
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        sync_car_datalog(conn, repo_dir)
+        conn.execute(
+            "UPDATE car_log_sessions SET parser_version = ? WHERE session_id = ?",
+            (0, "s1"),
+        )
+        conn.commit()
+        synced, updated = sync_car_datalog(conn, repo_dir)
+        assert synced == 0
+        assert updated == 1
     finally:
         conn.close()
 
